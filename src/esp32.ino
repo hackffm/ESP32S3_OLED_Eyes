@@ -5,11 +5,11 @@
 #include <MyCreds.h>      // Define WIFI_SSID and WIFI_PASSWORD here
 #include <elapsedMillis.h>
 #include <WiFi.h>
-#include <ESPmDNS.h>
 #include <WiFiClient.h>
 #include <ArduinoOTA.h>
 
 #include "LL_Lib.h"
+#include "helper.h" 
 
 // Activate none if no display is needed
 //#define U8G2_DISPLAYTYPE U8G2_SSD1306_128X64_ADAFRUIT_F_HW_I2C  /* 0.96 inch */
@@ -40,20 +40,17 @@ uint8_t u8log_buffer[U8LOG_WIDTH*U8LOG_HEIGHT];
 
 const char* hostname = "esp32-oled";
 // SSD1306Wire display(0x3c, 5, 4);   
-LL_Led LedBlue(16, true);
-bool OTAinProgress = false;
+LL_Led LedBlue(38, true);
+
+touchProcessor touch[4] = {6, 7, 8, 2};
 
 void setup() {
   LL_Log.begin(115200, 2222); // Serial baud, TCP Port
-  LL_Log.println("Booted.");
 
   Wire.begin(5,4);
   Wire.setClock(400000);
-
-    LL_Log.println("OLED Display found.");
-
-    u8g2.begin();
-    u8g2.enableUTF8Print();
+  u8g2.begin();
+  u8g2.enableUTF8Print();
     
     // dim display down 
     //u8g2.sendF("ca", 0xdb, 0); // not for SH1106 - need af (e3) afterwards
@@ -75,58 +72,9 @@ void setup() {
 
 
   u8g2log.print("Wifi connecting...\r\n");
-
   LL_Log.println("\r\nStart-up...");
-  WiFi.setHostname(hostname);
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);  // Try to connect to a given WiFi network
-  int tocount = 0;
-  while (WiFi.status() != WL_CONNECTED) {
-    Serial.print('.');
-    delay(500);
-  }
-  LL_Log.print("IP address: ");
-  LL_Log.println(WiFi.localIP());
 
-  //display.drawString(0,0,WiFi.localIP().toString().c_str());
-
-  MDNS.begin(hostname);
-  MDNS.addService("debug", "tcp", 2222);
-
-  // Arduino OTA preparation
-  ArduinoOTA.onStart([]() {
-    String type;
-    if (ArduinoOTA.getCommand() == U_FLASH) {
-      type = "sketch";
-    } else {  // U_FS
-      type = "filesystem";
-    }
-    // NOTE: if updating FS this would be the place to unmount FS using FS.end()
-    LL_Log.println("Start updating " + type);
-    OTAinProgress = true;
-  });
-  ArduinoOTA.onEnd([]() {
-    LL_Log.println("\r\nOTA Done.");
-    OTAinProgress = false;
-  });
-  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    //Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
-  });
-  ArduinoOTA.onError([](ota_error_t error) {
-    LL_Log.printf("Error[%u]: ", error);
-    if (error == OTA_AUTH_ERROR) {
-      LL_Log.println("Auth Failed");
-    } else if (error == OTA_BEGIN_ERROR) {
-      LL_Log.println("Begin Failed");
-    } else if (error == OTA_CONNECT_ERROR) {
-      LL_Log.println("Connect Failed");
-    } else if (error == OTA_RECEIVE_ERROR) {
-      LL_Log.println("Receive Failed");
-    } else if (error == OTA_END_ERROR) {
-      LL_Log.println("End Failed");
-    }
-  });
-  ArduinoOTA.begin();
+  connectWifi(WIFI_SSID, WIFI_PASSWORD, hostname); 
 
   // Create a new face
   face = new Face(/* screenWidth = */ 128, /* screenHeight = */ 64, /* eyeSize = */ 40);
@@ -134,9 +82,9 @@ void setup() {
   face->Expression.GoTo_Normal();
 
   // Assign a weight to each emotion
-  //face->Behavior.SetEmotion(eEmotions::Normal, 1.0);
-  //face->Behavior.SetEmotion(eEmotions::Angry, 1.0);
-  //face->Behavior.SetEmotion(eEmotions::Sad, 1.0);
+  face->Behavior.SetEmotion(eEmotions::Normal, 1.0);
+  face->Behavior.SetEmotion(eEmotions::Happy, 0.3);
+  face->Behavior.SetEmotion(eEmotions::Sad, 0.2);
   // Automatically switch between behaviours (selecting new behaviour randomly based on the weight assigned to each emotion)
   face->RandomBehavior = true;
 
@@ -149,17 +97,6 @@ void setup() {
   face->RandomLook = false;
 }
 
-float mapFloat(float x, float in_min, float in_max, float out_min, float out_max) {
-  // Check if x is outside the input range
-  if (x <= in_min) return out_min;
-  if (x >= in_max) return out_max;
-
-  // Calculate the proportion of x relative to the input range
-  float proportion = (x - in_min) / (in_max - in_min);
-
-  // Map the proportion to the output range and return the result
-  return (proportion * (out_max - out_min)) + out_min;
-}
 
 elapsedMillis blinkTimer = 0;
 void loop() {
@@ -186,7 +123,15 @@ void loop() {
     */
     //u8g2.sendBuffer();
     //LL_Log.printf("Touch %d %d %d %d\r\n", touchRead(14), touchRead(12), touchRead(15), touchRead(2));
-    LL_Log.printf("Touch %d %d %d %d\r\n", touchRead(6), touchRead(7), touchRead(8), touchRead(2));
+    for(int i=0; i<4; i++) {
+      touch[i].update();
+      if(touch[i].isTouched()) {
+      }
+    }
+    LL_Log.printf("Touch %d %d %d %d\r\n", touch[0].getTouchValue(), touch[1].getTouchValue(), touch[2].getTouchValue(), touch[3].getTouchValue());
+    float x = (float)touch[0].getTouchValue() / 100.0 - (float)touch[1].getTouchValue() / 100.0;
+    float y = (float)touch[2].getTouchValue() / 100.0 - (float)touch[3].getTouchValue() / 100.0;
+    face->Look.LookAt(x, y); 
   }
 
   if(LL_Log.receiveLineAvailable()) {
