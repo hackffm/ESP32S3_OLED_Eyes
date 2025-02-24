@@ -83,10 +83,10 @@ void setup() {
 
   // Assign a weight to each emotion
   face->Behavior.SetEmotion(eEmotions::Normal, 1.0);
-  face->Behavior.SetEmotion(eEmotions::Happy, 0.3);
-  face->Behavior.SetEmotion(eEmotions::Sad, 0.2);
+  //face->Behavior.SetEmotion(eEmotions::Happy, 0.3);
+  //face->Behavior.SetEmotion(eEmotions::Glee, 0.2);
   // Automatically switch between behaviours (selecting new behaviour randomly based on the weight assigned to each emotion)
-  face->RandomBehavior = true;
+  face->RandomBehavior = false;
 
   // Automatically blink
   face->RandomBlink = true;
@@ -103,10 +103,14 @@ void loop() {
   LL_Log.update(); LedBlue.update();
 
   if(blinkTimer > 100) {
+    static int emo = 0;
     blinkTimer = 0;
     LedBlue.set(1, 1);
     if(digitalRead(0)==0) {
       LL_Log.println("Push");
+      emo++;
+      if(emo>=EMOTIONS_COUNT) emo = 0;
+      face->Behavior.GoToEmotion((eEmotions)emo);
     }
     int logbox_y = u8g2.getDisplayHeight() - (U8LOG_HEIGHT * U8LOG_FONT_Y) - 3;
     /*
