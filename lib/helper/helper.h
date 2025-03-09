@@ -17,7 +17,7 @@ class touchProcessor {
     void update() {
       _lastTouchValue = touchRead(_pin)/32;
       if(_touchAvgValue == 0) _touchAvgValue = _lastTouchValue;
-      _touchAvgValue = _touchAvgValue * 0.98 + _lastTouchValue * 0.02;
+      _touchAvgValue = _touchAvgValue * 0.95 + _lastTouchValue * 0.05;
       _touchValue = _lastTouchValue - _touchAvgValue;
       if(_touchValue > 20) {
         _touched = true;

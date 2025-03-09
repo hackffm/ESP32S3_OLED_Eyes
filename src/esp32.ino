@@ -2,14 +2,35 @@
    The MIT License (MIT)
 */
 
-#include <MyCreds.h>      // Define WIFI_SSID and WIFI_PASSWORD here
+#include <MyCredsHackffm.h>      // Define WIFI_SSID and WIFI_PASSWORD here
 #include <elapsedMillis.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <ArduinoOTA.h>
 
+#include "Freenove_WS2812_Lib_for_ESP32.h"
+
 #include "LL_Lib.h"
 #include "helper.h" 
+
+#include "AudioTools.h"
+//#include "knghtsng.h"
+//#include "alice.h"
+//#include "walle1.h"
+#include "happy.h"
+
+//Data Flow: MemoryStream -> EncodedAudioStream  -> PWMAudioOutput
+//Use 8000 for alice_wav and 11025 for knghtsng_wav
+AudioInfo info(11025, 1, 16);
+
+MemoryStream wav((const uint8_t*)happytree, wav_len);
+//MemoryStream wav(knghtsng_wav, knghtsng_wav_len);
+//MemoryStream wav(alice_wav, alice_wav_len);
+PWMAudioOutput pwm;          // PWM output 
+//EncodedAudioStream out(&pwm, new WAVDecoder()); // Decoder stream
+StreamCopy copier(pwm, wav, 60000);    // copy in to out
+
+Task task("mp3-copy", 10000, 1, 0);
 
 // Activate none if no display is needed
 //#define U8G2_DISPLAYTYPE U8G2_SSD1306_128X64_ADAFRUIT_F_HW_I2C  /* 0.96 inch */
@@ -44,6 +65,8 @@ LL_Led LedBlue(38, true);
 
 touchProcessor touch[4] = {6, 7, 8, 2};
 
+Freenove_ESP32_WS2812 strip = Freenove_ESP32_WS2812(2, 48, 0, TYPE_GRB);
+
 void setup() {
   LL_Log.begin(115200, 2222); // Serial baud, TCP Port
 
@@ -74,7 +97,9 @@ void setup() {
   u8g2log.print("Wifi connecting...\r\n");
   LL_Log.println("\r\nStart-up...");
 
-  connectWifi(WIFI_SSID, WIFI_PASSWORD, hostname); 
+  //connectWifi(WIFI_SSID, WIFI_PASSWORD, hostname); 
+  WiFi.mode(WIFI_OFF);
+  delay(1);
 
   // Create a new face
   face = new Face(/* screenWidth = */ 128, /* screenHeight = */ 64, /* eyeSize = */ 40);
@@ -95,6 +120,22 @@ void setup() {
 
   // Automatically choose a new random direction to look
   face->RandomLook = false;
+
+  // AudioToolsLogger.begin(Serial, AudioToolsLogLevel::Info);  
+
+  wav.begin();
+  // out.begin();
+
+  auto config = pwm.defaultConfig();
+  config.copyFrom(info);
+  config.start_pin = 15;
+  pwm.begin(config);
+
+  // task.begin([](){copier.copy();});
+
+  strip.begin();
+  strip.setBrightness(255); 
+
 }
 
 
@@ -132,10 +173,16 @@ void loop() {
       if(touch[i].isTouched()) {
       }
     }
-    LL_Log.printf("Touch %d %d %d %d\r\n", touch[0].getTouchValue(), touch[1].getTouchValue(), touch[2].getTouchValue(), touch[3].getTouchValue());
     float x = (float)touch[0].getTouchValue() / 100.0 - (float)touch[1].getTouchValue() / 100.0;
     float y = (float)touch[2].getTouchValue() / 100.0 - (float)touch[3].getTouchValue() / 100.0;
+    LL_Log.printf("Touch %d %d %d %d %f:%f\r\n", touch[0].getTouchValue(), touch[1].getTouchValue(), touch[2].getTouchValue(), touch[3].getTouchValue(),x,y);
     face->Look.LookAt(x, y); 
+    static uint8_t j = 0;
+    j++;
+    for (int i = 0; i < 2; i++) {
+      strip.setLedColorData(i, strip.Wheel((i * 256 / 2 + j) & 255));
+    }
+    strip.show();
   }
 
   if(LL_Log.receiveLineAvailable()) {
@@ -156,4 +203,21 @@ void loop() {
   if(OTAinProgress == false) {
     face->Update();
   } 
+
+  if (wav) {
+    copier.copy();
+  } else if(0) {
+    // after we are done we just print some info form the wav file
+    auto info = pwm.audioInfo();
+  //  LOGI("The audio rate from the wav file is %d", info.sample_rate);
+  //  LOGI("The channels from the wav file is %d", info.channels);
+
+    // restart from the beginning
+    Serial.println("Restarting...");
+    //delay(3000);
+    face->Wait(3000);
+    //out.begin();   // indicate that we process the WAV header
+    wav.begin();       // reset actual position to 0
+    pwm.begin();       // reset counters 
+  }
 }
