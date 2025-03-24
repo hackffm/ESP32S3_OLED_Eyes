@@ -22,9 +22,9 @@ Face::Face(uint16_t screenWidth, uint16_t screenHeight, uint16_t eyeSize)
 
   // Unlike almost every other Arduino library (and the I2C address scanner script etc.)
   // u8g2 uses 8-bit I2C address, so we shift the 7-bit address left by one
-  u8g2.setI2CAddress(0x3C<<1);
-  u8g2.begin();
-  u8g2.clearBuffer();
+ // u8g2.setI2CAddress(0x3C<<1);
+ // u8g2.begin();
+ // u8g2.clearBuffer();
 
 	Width = screenWidth;
 	Height = screenHeight;
@@ -71,11 +71,27 @@ void Face::DoBlink() {
 	Blink.Blink();
 }
 
-void Face::Update() {
+void Face::Update(bool noDraw) {
 	if(RandomBehavior) Behavior.Update();
 	if(RandomLook) Look.Update();
 	if(RandomBlink)	Blink.Update();
-	Draw();
+	if(noDraw == false) Draw();
+}
+
+// Does not clear the display nor send the buffer (for overlays etc)
+void Face::UpdateBuffer() {
+  // Clear the display
+  //u8g2.clearBuffer();
+  // Draw left eye
+	LeftEye.CenterX = CenterX - EyeSize / 2 - EyeInterDistance;
+	LeftEye.CenterY = CenterY;
+	LeftEye.Draw();
+  // Draw right eye
+	RightEye.CenterX = CenterX + EyeSize / 2 + EyeInterDistance;
+	RightEye.CenterY = CenterY;
+	RightEye.Draw();
+  // Transfer the redrawn buffer to the display
+  //u8g2.sendBuffer();
 }
 
 void Face::Draw() {

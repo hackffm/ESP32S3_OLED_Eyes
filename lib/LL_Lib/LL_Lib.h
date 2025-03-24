@@ -13,6 +13,7 @@
 #endif
 
 #define RECEIVELINEBUFSIZE 200
+#define LL_LOG_MAX_CLIENTS 3
 
 class LL_Log_c : public Print {
   public:
@@ -34,15 +35,14 @@ class LL_Log_c : public Print {
   protected:
     Stream *_ptrlogSerial = NULL;
     WiFiServer *_ptrlogTCPServer = NULL;
-    WiFiClient _logTCPClient;
+    WiFiClient _logTCPClients[LL_LOG_MAX_CLIENTS];
     bool _logTCPClientConnected = false;
     uint16_t _logTCPServerPort = 0;
     bool _PreviousWifiConnectionState = false;
     char _receiveLineBuf[RECEIVELINEBUFSIZE];
     uint16_t _receiveLineIndex = 0;
     bool _receiveLineAvailable = false;
-
-
+    SemaphoreHandle_t _xMutex = NULL;  // Create a mutex object
 };
 
 extern LL_Log_c LL_Log;

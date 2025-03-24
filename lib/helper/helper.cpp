@@ -4,6 +4,8 @@
 #include <ESPmDNS.h>
 #include <WiFiClient.h>
 #include <ArduinoOTA.h>
+#include <Arduino.h>
+#include <Wire.h>
 
 #include "LL_Lib.h"
 
@@ -13,6 +15,8 @@ void connectWifi(const char* ssid, const char* password, const char* hostname) {
   WiFi.setHostname(hostname);
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
+  WiFi.setTxPower(WIFI_POWER_7dBm);
+  WiFi.setSleep(true);
   int tries = 0;
   LL_Log.println("Connecting to WiFi..");
   while ((WiFi.status() != WL_CONNECTED) && (tries < 20)) {
@@ -73,16 +77,3 @@ void setupOTA(const char* hostname) {
 
 
 
-
-
-float mapFloat(float x, float in_min, float in_max, float out_min, float out_max) {
-  // Check if x is outside the input range
-  if (x <= in_min) return out_min;
-  if (x >= in_max) return out_max;
-
-  // Calculate the proportion of x relative to the input range
-  float proportion = (x - in_min) / (in_max - in_min);
-
-  // Map the proportion to the output range and return the result
-  return (proportion * (out_max - out_min)) + out_min;
-}

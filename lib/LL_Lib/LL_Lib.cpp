@@ -9,8 +9,10 @@
 #endif
 
 #include "LL_Lib.h"
+#include "hackffm_badge_lib.h"
 
 void LL_Log_c::begin(uint32_t serialRate, uint16_t tcpPort) {
+  _xMutex = xSemaphoreCreateMutex();
   if(serialRate != 0) {
     Serial.begin(serialRate);
     _ptrlogSerial = &Serial;
@@ -24,8 +26,19 @@ size_t LL_Log_c::write(uint8_t v) {
 }
 
 size_t LL_Log_c::write(const uint8_t *buffer, size_t size) {
-  if(_ptrlogSerial) _ptrlogSerial->write(buffer, size);
-  if(_logTCPClient.connected()) _logTCPClient.write(buffer, size);
+  if(xSemaphoreTake(_xMutex, 1000 / portTICK_PERIOD_MS)) {
+    if(_ptrlogSerial) _ptrlogSerial->write(buffer, size);
+    for(int i=0; i<LL_LOG_MAX_CLIENTS; i++) {
+      if(_logTCPClients[i]) {
+        if(_logTCPClients[i].connected()) _logTCPClients[i].write(buffer, size);
+        delay(1);
+      }
+    }
+    #if defined(U8G2_DISPLAYTYPE)
+      u8g2log.write(buffer, size);
+    #endif
+    xSemaphoreGive(_xMutex);
+  }
   return size;
 }
 
@@ -75,14 +88,22 @@ void LL_Log_c::update() {
         // Start TCP Server
         WiFiServer *srv = new WiFiServer(_logTCPServerPort);
         srv->begin(_logTCPServerPort);
+        srv->setNoDelay(true);
         _ptrlogTCPServer = srv;
+        Serial.printf("Log-Server started on port %d.\r\n",_logTCPServerPort);
       }
 
     } else {
-      // Wifi now went offline
-       if(_ptrlogTCPServer != 0) {
+      // Wifi now went offline, stop all clients
+      if(_ptrlogTCPServer != NULL) {
         _logTCPClientConnected = false;
-        _logTCPClient.stop(); // .abort();
+        for(int i=0; i<LL_LOG_MAX_CLIENTS; i++) {
+          if(_logTCPClients[i]) {
+            _logTCPClients[i].stop();
+            Serial.printf("Log-Client %d stopped.\r\n", i);
+          }
+        }
+        _logTCPClientConnected = false;
         _ptrlogTCPServer->close();
         delete _ptrlogTCPServer;
         _ptrlogTCPServer = NULL;
@@ -95,14 +116,40 @@ void LL_Log_c::update() {
   if(isWifiConnected) {
     if(_ptrlogTCPServer != 0) {
       if (_ptrlogTCPServer->hasClient()) {
-        _logTCPClient = _ptrlogTCPServer->accept();
-        Serial.println("New client");
-        _logTCPClient.println("TCP Log opened.");
-        _logTCPClientConnected = true;
+        bool accepted = false;
+        for(int i=0; i<LL_LOG_MAX_CLIENTS; i++) {
+          if((!_logTCPClients[i]) || (!_logTCPClients[i].connected())) {
+            if(_logTCPClients[i]) _logTCPClients[i].stop();
+            _logTCPClients[i] = _ptrlogTCPServer->available();
+            Serial.printf("Log-Client %d connected.\r\n", i);
+            _logTCPClients[i].println("TCP Log opened.");
+            accepted = true;
+            _logTCPClientConnected = true;
+            break;
+          }
+        }
+        if(!accepted) {
+          _ptrlogTCPServer->available().stop();
+          Serial.println("Log client connection refused - no free slots.");
+        }
       }
-      if(_logTCPClient.available()) {
-        receiveChar(_logTCPClient.read());
+
+      // check all clients for available data or disconnections
+      bool clientsleft = false;
+      for(int i=0; i<LL_LOG_MAX_CLIENTS; i++) {
+          if(_logTCPClients[i]) {
+            if(!_logTCPClients[i].connected()) {
+              _logTCPClients[i].stop(); 
+              Serial.printf("Log-Client %d disconnected.\r\n", i);
+              continue;           
+            }
+            clientsleft = true;
+            if(_logTCPClients[i].available()) {
+              receiveChar(_logTCPClients[i].read());
+            }
+          }
       }
+      _logTCPClientConnected = clientsleft;
     }
   }
 

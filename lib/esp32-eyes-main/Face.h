@@ -42,7 +42,10 @@ public:
     FaceBehavior Behavior;
     FaceExpression Expression;
 
-    void Update();
+    void Update(bool noDraw = false);
+    void UpdateBuffer();
+    void Draw();
+
     void DoBlink();
 
     bool RandomBehavior = true;
@@ -57,7 +60,7 @@ public:
     void Wait(unsigned long milliseconds);
 
 protected:
-    void Draw();
+    
 };
 
 #endif
