@@ -4727,7 +4727,7 @@
 				(justify top)
 			)
 		)
-		(property "Value" "1K"
+		(property "Value" "4K7"
 			(at 1.5524 1.0011 90)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -4741,7 +4741,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 0 0 270)
+			(at 0 0 90)
 			(layer "F.Fab")
 			(hide yes)
 			(uuid "bcf6f69c-11c3-4fef-b5e7-2ed4daeee42c")
@@ -4753,7 +4753,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 0 0 270)
+			(at 0 0 90)
 			(layer "F.Fab")
 			(hide yes)
 			(uuid "45741871-e5d8-40fb-b7f3-5ff16a878f19")

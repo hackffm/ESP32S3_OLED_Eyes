@@ -4,8 +4,9 @@
    2025-03-25 Lutz Lisseck
 */
 
+// Just uncomment these MyCreds.h files in case you have compiling issues
 //#include <MyCredsHackffm.h>      // Define WIFI_SSID and WIFI_PASSWORD here - see file in Attic for example
-#include <MyCreds.h>      // Define WIFI_SSID and WIFI_PASSWORD here - see file in Attic for example
+//#include <MyCreds.h>      // Define WIFI_SSID and WIFI_PASSWORD here - see file in Attic for example
 #include <hackffm_badge_lib.h>
 
 const char* hostname = "hackffm-badge";
