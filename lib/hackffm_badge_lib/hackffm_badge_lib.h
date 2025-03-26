@@ -9,6 +9,7 @@
 #include <FS.h>
 #include <U8g2lib.h>
 #include "Face.h"
+#include "LL_Lib.h"
 
 extern U8G2_DISPLAYTYPE u8g2;
 extern U8G2LOG u8g2log;
@@ -25,7 +26,7 @@ class touchProcessor {
     }
     void update() {
       if(_pin < 0) return;
-      _lastTouchValue = touchRead(_pin)/32;
+      _lastTouchValue = touchRead(_pin)/16;
       if(_touchAvgValue == 0) _touchAvgValue = _lastTouchValue;
       _touchAvgValue = _touchAvgValue * 0.95 + _lastTouchValue * 0.05;
       _touchValue = _lastTouchValue - _touchAvgValue;
@@ -55,7 +56,7 @@ class touchProcessor {
 class HackFFMBadgeLib {
   public:
     void begin();
-    void update();
+    void update();  // Updates touch
     void powerOff();
 
     void setBoardLED(uint32_t rgb);  // set the LED on the little ESP32-S3 board
@@ -65,6 +66,9 @@ class HackFFMBadgeLib {
     void setAntennaLED(uint8_t r, uint8_t g, uint8_t b);
 
     void setPowerAudio(bool on);  // Enables or disables the audio amplifier (amps draws high current from battery!)
+
+    uint32_t but0PressedSince(); // 0 = not pressed
+    uint32_t but0PressedFor();   // 0 = no event or still pressed, otherwise time in ms of last press, cleared after read
     
     bool isNewTouchDataAvailable() { bool r = touchUpdated; touchUpdated = false; return r; }
 
@@ -98,6 +102,11 @@ class HackFFMBadgeLib {
     static const int NUM_TOUCH_PINS = 4;
     touchProcessor touch[NUM_TOUCH_PINS] = {-1, -1, -1, -1}; // LU, LD, RU, RD
 
+    void connectWifi(const char* ssid, const char* password, const char* hostname);
+    void setupOTA(const char* hostname);
+
+    bool OTAinProgress = false;
+
   private:
     void detectHardware();
     static const int PINS_PER_VARIANT = 15; 
@@ -115,6 +124,10 @@ class HackFFMBadgeLib {
     void setPowerHold(bool on);
     void initOLED();
     Face* face_ = nullptr;
+
+    elapsedMillis but0CurrentPressedMs = 0;
+    uint32_t but0WasPressedForMs = 0;
+    bool but0LastPressed = false;
     
 };
 

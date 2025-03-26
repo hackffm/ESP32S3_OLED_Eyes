@@ -1,31 +1,37 @@
 /**
-   The MIT License (MIT)
+   The MIT License (MIT) (but poisoned by GPL in the Face Library)
+   Hackerspace-FFM e.V. Badge V1
+   2025-03-25 Lutz Lisseck
 */
 
-#include "hackffm_badge_lib.h"
+//#include <MyCredsHackffm.h>      // Define WIFI_SSID and WIFI_PASSWORD here - see file in Attic for example
+#include <MyCreds.h>      // Define WIFI_SSID and WIFI_PASSWORD here - see file in Attic for example
+#include <hackffm_badge_lib.h>
 
-#include <MyCredsHackffm.h>      // Define WIFI_SSID and WIFI_PASSWORD here
-#include <elapsedMillis.h>
-#include <WiFi.h>
-#include <WiFiClient.h>
-#include <ArduinoOTA.h>
-
-#include "LL_Lib.h"
-#include "helper.h" 
-
-
-const char* hostname = "esp32-oled";
+const char* hostname = "hackffm-badge";
  
 void setup() {
   HackFFMBadge.begin();
 
-  LL_Log.begin(115200, 2222); // Serial baud, TCP Port
+  LL_Log.begin(115200, 2222); // Serial baud (not used), TCP Port
 
   Badge.drawBMP("/badge.bmp");
-  delay(6000);
-
-  //connectWifi(WIFI_SSID, WIFI_PASSWORD, hostname); 
-  //while(1) delay(1);
+  elapsedMillis logoTimer = 0;
+  while(logoTimer < 6000) {
+    delay(10);
+    if(HackFFMBadge.but0PressedFor() > 1000) {
+      #ifdef WIFI_SSID
+      LL_Log.println("Long Press");
+      delay(10);
+      HackFFMBadge.connectWifi(WIFI_SSID, WIFI_PASSWORD, hostname);
+      char buf[128]; sprintf(buf, "$!$c$8$+$+$+IP: %s", WiFi.localIP().toString().c_str());
+      Badge.drawString(buf);
+      Badge.setBoardLED(2, 0, 8); // pink
+      delay(8000);
+      #endif
+    }
+  }
+  
 
   // Assign a weight to each emotion
   Badge.face().Behavior.GoToEmotion(eEmotions::Normal);
@@ -47,66 +53,60 @@ void setup() {
 
 
 void loop() {
-  static elapsedMillis pressedTime = 0;
-  static bool lastButState = true;
-  static elapsedMillis blinkTimer = 0;
+  static elapsedMillis actionTimer = 0;
 
-  Badge.update();
-
+  Badge.update();  // <50us
+  
   Badge.drawFace();
-
+  
   /*
     // Paint Face like TV raster lines
-    u8g2.clearBuffer();
-    Badge.face().UpdateBuffer();
+    u8g2.clearBuffer(); // <10us
+    Badge.face().UpdateBuffer(); // ~450us
     u8g2.setDrawColor(0);
     for(int y = 0; y < 64; y+=2) {
       u8g2.drawHLine(0,y,128);
     }
     u8g2.setDrawColor(1);
-    u8g2.sendBuffer();
+    u8g2.sendBuffer(); // ~17.1ms
   */
-
   LL_Log.update(); 
 
   
-  if(blinkTimer > 100) {
+  if(actionTimer > 100) {
     static int emo = 0;
-    blinkTimer = 0;
+    actionTimer = 0;
 
-    if(lastButState != digitalRead(0)) {
-      lastButState = digitalRead(0);
-      if(lastButState == 0) {
-        pressedTime = 0;
-      } else {
-        if(pressedTime > 1000) {
-          LL_Log.println("Long Press");
-          delay(1000);
-          HackFFMBadge.powerOff();
-        } else {
-          LL_Log.println("Short Press");
-          emo++;
-          if(emo>=EMOTIONS_COUNT) emo = 0;
-          Badge.face().Behavior.GoToEmotion((eEmotions)emo);
-        }
-      }
+    // check button on MCU module itself (beside RESET button)
+    uint32_t pressedFor = HackFFMBadge.but0PressedFor();
+    uint32_t pressedSince = HackFFMBadge.but0PressedSince();
+    if((pressedFor > 0) || (pressedSince > 0)) {
+      LL_Log.printf("PressedFor: %d, PressedSince: %d\r\n", pressedFor, pressedSince);
+    }
+
+    if(pressedFor > 1000) {
+      LL_Log.println("Long Press");
+      delay(1000);
+      HackFFMBadge.powerOff();
+    } else if(pressedFor > 0) {
+      LL_Log.println("Short Press");
+      emo++;
+      if(emo>=EMOTIONS_COUNT) emo = 0;
+      Badge.face().Behavior.GoToEmotion((eEmotions)emo);
     }
 
     if(HackFFMBadge.isNewTouchDataAvailable()) {
       float x = (float)HackFFMBadge.touch[0].getTouchValue() / 100.0 - (float)HackFFMBadge.touch[1].getTouchValue() / 100.0;
       float y = (float)HackFFMBadge.touch[2].getTouchValue() / 100.0 - (float)HackFFMBadge.touch[3].getTouchValue() / 100.0;
-   //   LL_Log.printf("Touch %d %d %d %d %f:%f\r\n", HackFFMBadge.touch[0].getLastTouchValue(), 
-   //     HackFFMBadge.touch[1].getLastTouchValue(), HackFFMBadge.touch[2].getLastTouchValue(), 
-   //     HackFFMBadge.touch[3].getLastTouchValue(),x,y);
+      LL_Log.printf("Touch LU:%d LD:%d RU:%d RD:%d %f:%f\r\n", HackFFMBadge.touch[0].getTouchValue(), 
+        HackFFMBadge.touch[1].getTouchValue(), HackFFMBadge.touch[2].getTouchValue(), 
+        HackFFMBadge.touch[3].getTouchValue(),x,y);
       Badge.face().Look.LookAt(x, y); 
     }
 
-
+    // Animate antenna LED
     static uint8_t j = 0;
     j++;
-    for (int i = 0; i < 2; i++) {
-    //  HackFFMBadge.setAntennaLED( HackFFMBadge.freenoveAntennaLED->Wheel((i * 256 / 2 + j) & 255)); // crash...
-    }
     Badge.setAntennaLED(j%32, j%16, j%20);
   }
 
@@ -127,11 +127,14 @@ void loop() {
         Badge.face().Behavior.SetEmotion((eEmotions)addr /* moods[addr] */, (float)(data % 21) / 20.0 );
       }
     }
+    if(LL_Log.receiveLine[0]=='s') {
+      int data;
+      if(sscanf(&LL_Log.receiveLine[1],"%d",&data)>=1) {
+        LL_Log.printf("Speed khz: %d\r\n",  data);
+
+      }
+    } 
   }
 
-  ArduinoOTA.handle();
-  if(OTAinProgress == false) {
-  //  face->Update();
-  } 
 
 }

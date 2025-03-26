@@ -9,7 +9,9 @@
 #endif
 
 #include "LL_Lib.h"
-#include "hackffm_badge_lib.h"
+
+#include <U8g2lib.h>
+extern U8G2LOG u8g2log;
 
 void LL_Log_c::begin(uint32_t serialRate, uint16_t tcpPort) {
   _xMutex = xSemaphoreCreateMutex();

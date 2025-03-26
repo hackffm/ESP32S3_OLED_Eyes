@@ -8,6 +8,10 @@
 #include <Wire.h>
 #include <LittleFS.h>
 #include <FS.h>
+#include <ArduinoOTA.h>
+#include <ESPmDNS.h>
+
+#include "LL_Lib.h"
 
 HackFFMBadgeLib HackFFMBadge;
 HackFFMBadgeLib& Badge = HackFFMBadge;
@@ -62,6 +66,7 @@ void HackFFMBadgeLib::begin() {
   Serial.println("HackFFM Badge initialized");
 }
 
+// Touch sensor update, ArduinoOTA and Face update
 void HackFFMBadgeLib::update() {
   if(lastTouchRead > 100) {
     lastTouchRead = 0;
@@ -75,6 +80,14 @@ void HackFFMBadgeLib::update() {
   if((faceActive) && (face_)) {
     face_->Update(true);
   }
+
+  ArduinoOTA.handle();
+  if(OTAinProgress == true) {
+    for(int i=0; i<20; i++) {
+      delay(10);
+      ArduinoOTA.handle();
+    }
+  } 
     
 }
 
@@ -212,6 +225,7 @@ void HackFFMBadgeLib::drawBMP(const char *filename) {
   file.close();
 
   u8g2.sendBuffer();  
+  u8g2.setDrawColor(1);
 }
 
 /* Special characters:
@@ -314,6 +328,9 @@ void HackFFMBadgeLib::initOLED() {
   u8g2.setI2CAddress(OledAddress<<1);
   u8g2.begin();
   u8g2.enableUTF8Print();
+
+  // make it faster
+  u8g2.setBusClock(1000000UL);
 
   // dim display down 
   //u8g2.sendF("ca", 0xdb, 0); // not for SH1106 - need af (e3) afterwards
@@ -426,6 +443,7 @@ void HackFFMBadgeLib::detectHardware() {
       default: Serial.println("Unknown variant"); break;
     }
     setBoardLED(0, 1, 0); // green dark
+    setAntennaLED(12, 4, 0); // orange
   } else {
     Serial.println("No OLED display found - detection of variant not possible, other hardware not available!");
 
@@ -541,7 +559,7 @@ void HackFFMBadgeLib::powerOff() {
   setPowerHold(false);
 
   delay(1000);
-  
+
   // Turn off the ESP32-S3
   esp_deep_sleep_start();
 
@@ -559,6 +577,103 @@ void HackFFMBadgeLib::setPowerAudio(bool on) {
     pinMode(pinAudioEn, OUTPUT);
     digitalWrite(pinAudioEn, on?LOW:HIGH);
   }
+}
+
+uint32_t HackFFMBadgeLib::but0PressedSince() {
+  uint32_t  ret = 0;
+  if(digitalRead(0) == LOW) {
+    if(but0LastPressed == false) {
+      // is pressed, was not pressed before
+      but0LastPressed = true;
+      but0CurrentPressedMs = 0;
+      ret = 0; // We don't know how long it was pressed before...
+    } else {  
+      ret = (uint32_t)but0CurrentPressedMs;
+    }
+  } else {
+    if(but0LastPressed == false) {
+      // is not pressed and was not pressed before
+      ret = 0;
+    } else {
+      // is not pressed, but was pressed before
+      ret = 0; // as it is not pressed any longer
+      but0LastPressed = false;
+      but0WasPressedForMs = (uint32_t)but0CurrentPressedMs;
+      but0CurrentPressedMs = 0;
+    } 
+  }
+  return ret;
+}
+
+uint32_t HackFFMBadgeLib::but0PressedFor() {
+  but0PressedSince(); // call to update but0WasPressedForMs
+  uint32_t ret = but0WasPressedForMs;
+  but0WasPressedForMs = 0;
+  return ret;
+}
+
+void HackFFMBadgeLib::connectWifi(const char* ssid, const char* password, const char* hostname) {
+  WiFi.setHostname(hostname);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  WiFi.setTxPower(WIFI_POWER_7dBm);
+  WiFi.setSleep(true);
+  int tries = 0;
+  LL_Log.println("Connecting to WiFi..");
+  while ((WiFi.status() != WL_CONNECTED) && (tries < 20)) {
+    delay(500);
+    LL_Log.print(".");
+    tries++;
+  }
+  if(WiFi.status() == WL_CONNECTED) {
+    LL_Log.print("Connected to ");
+    LL_Log.println(ssid);
+    LL_Log.print("IP address: ");
+    LL_Log.println(WiFi.localIP());
+    setupOTA(hostname);
+  } else {
+    LL_Log.println("Connection failed.");
+  }
+  
+}
+
+void HackFFMBadgeLib::setupOTA(const char* hostname) {
+  ArduinoOTA.onStart([]() {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH) {
+      type = "sketch";
+    } else {  // U_FS
+      type = "filesystem";
+    }
+    // NOTE: if updating FS this would be the place to unmount FS using FS.end()
+    LL_Log.println("Start updating " + type);
+    Badge.OTAinProgress = true;
+  });
+  ArduinoOTA.onEnd([]() {
+    LL_Log.println("\r\nOTA Done.");
+    Badge.OTAinProgress = false;
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    //Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    LL_Log.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) {
+      LL_Log.println("Auth Failed");
+    } else if (error == OTA_BEGIN_ERROR) {
+      LL_Log.println("Begin Failed");
+    } else if (error == OTA_CONNECT_ERROR) {
+      LL_Log.println("Connect Failed");
+    } else if (error == OTA_RECEIVE_ERROR) {
+      LL_Log.println("Receive Failed");
+    } else if (error == OTA_END_ERROR) {
+      LL_Log.println("End Failed");
+    }
+  });
+  ArduinoOTA.begin();
+  
+  MDNS.begin(hostname);
+  MDNS.addService("debug", "tcp", 2222);
 }
 
 float mapFloat(float x, float in_min, float in_max, float out_min, float out_max) {
