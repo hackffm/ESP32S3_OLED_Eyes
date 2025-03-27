@@ -4,12 +4,18 @@
    2025-03-25 Lutz Lisseck
 */
 
-// Just uncomment these MyCreds.h files in case you have compiling issues
-//#include <MyCredsHackffm.h>      // Define WIFI_SSID and WIFI_PASSWORD here - see file in Attic for example
-//#include <MyCreds.h>      // Define WIFI_SSID and WIFI_PASSWORD here - see file in Attic for example
+// Wifi credentials are in a MyCreds.h file that must reside in /<HOME>/.platformio/lib/MyCreds/MyCreds.h
+// see attic/MyCredsHackffm.h for an example
+#if defined __has_include
+#  if __has_include (<MyCreds.h>)
+#    include <MyCreds.h>  // Define WIFI_SSID and WIFI_PASSWORD here - see file in Attic for example
+#  endif
+#endif
+
 #include <hackffm_badge_lib.h>
 
 const char* hostname = "hackffm-badge";
+char badgeUserName[128] = "$cHackFFM$nBadge";
  
 void setup() {
   HackFFMBadge.begin();
@@ -52,25 +58,57 @@ void setup() {
 
 }
 
+int CurrentAction = 0;
+int CurrentActionDuration = 1000;
+elapsedMillis CurrentActionTimer = 0;
+
 
 void loop() {
   static elapsedMillis actionTimer = 0;
 
   Badge.update();  // <50us
   
-  Badge.drawFace();
+  if(CurrentActionTimer > CurrentActionDuration) {
+    CurrentActionTimer = 0;
+    CurrentAction++;
+    if(CurrentAction > 3) CurrentAction = 0;
+  }
+  switch(CurrentAction) {
+    case 0: 
+      CurrentActionDuration = 5000;
+      Badge.drawFace();
+      break;
+    case 1: 
+      CurrentActionDuration = 1000;
+      Badge.drawBMP("/badge.bmp");
+      break;
+    case 2: 
+      CurrentActionDuration = 5000;
+      // Paint Face like TV raster lines
+      u8g2.clearBuffer(); // <10us
+      Badge.face().UpdateBuffer(); // ~450us
+      u8g2.setDrawColor(0);
+      for(int y = 0; y < 64; y+=2) {
+        u8g2.drawHLine(0,y,128);
+      }
+      u8g2.setDrawColor(1);
+      u8g2.sendBuffer(); // ~17.1ms
+      break;
+    case 3: 
+      CurrentActionDuration = 5000;
+      u8g2.clearBuffer(); 
+      u8g2.setDrawColor(1);
+      //Badge.face().UpdateBuffer();
+      Badge.drawString(badgeUserName);
+      
+      u8g2.sendBuffer(); 
+
+      break;
+  }
   
-  /*
-    // Paint Face like TV raster lines
-    u8g2.clearBuffer(); // <10us
-    Badge.face().UpdateBuffer(); // ~450us
-    u8g2.setDrawColor(0);
-    for(int y = 0; y < 64; y+=2) {
-      u8g2.drawHLine(0,y,128);
-    }
-    u8g2.setDrawColor(1);
-    u8g2.sendBuffer(); // ~17.1ms
-  */
+
+ 
+
   LL_Log.update(); 
 
   
@@ -128,10 +166,11 @@ void loop() {
         Badge.face().Behavior.SetEmotion((eEmotions)addr /* moods[addr] */, (float)(data % 21) / 20.0 );
       }
     }
-    if(LL_Log.receiveLine[0]=='s') {
-      int data;
-      if(sscanf(&LL_Log.receiveLine[1],"%d",&data)>=1) {
-        LL_Log.printf("Speed khz: %d\r\n",  data);
+    if(LL_Log.receiveLine[0]=='u') {
+      char data[128];
+      if(sscanf(&LL_Log.receiveLine[1],"%127[^\n]",&data)>=1) {
+        strcpy(badgeUserName, data);
+        LL_Log.printf("Bade name: %s\r\n",  badgeUserName);
 
       }
     } 

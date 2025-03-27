@@ -253,6 +253,7 @@ void HackFFMBadgeLib::drawString(const char *str, int x, int y, int dy, bool noD
         dsFlags &= ~(1);
         switch(c) {
           case '$': buf[idx++] = c; break;
+          case 'n': c = '\n'; goto LINEFEED; break;
           case '!': u8g2.clearBuffer(); break;
           case '+': y++; break;
           case '-': y--; break;
@@ -296,6 +297,7 @@ void HackFFMBadgeLib::drawString(const char *str, int x, int y, int dy, bool noD
         }        
       }
     } else {
+      LINEFEED:
       switch(c) {
         case 0:
         case '\n':
