@@ -73,6 +73,8 @@ class HackFFMBadgeLib {
     bool isNewTouchDataAvailable() { bool r = touchUpdated; touchUpdated = false; return r; }
 
     void listDir(const char *dirname = "/", uint8_t levels = 1);
+    bool writeFile(const char *path, const String &data);
+    String readFile(const char *path);
 
     void writeTone(uint32_t freq = 0 /* 0 to stop */, uint32_t duty = 8);
 
@@ -81,12 +83,13 @@ class HackFFMBadgeLib {
     void drawFace() { face_->Draw(); }
 
      /* Special characters:
-      * 0x0a \n: new line
+      * 0x0a \n or $n: new line
       * $: Escape, next char defines action
       *    $: prints $
       *    c,l,r: center/left/right aligned
-      *    0..9,a,b,d,e,f,g: set fonts
+      *    0..9,a,b,d,e,f,g: set fonts (small to large)
       *    !: clear display
+      *    +: move 1px down, -: move 1px up
       */
     void drawString(const char *str, int x = 0, int y = 0, int dy = 2, bool noDraw = false); 
 

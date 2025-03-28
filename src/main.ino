@@ -7,14 +7,14 @@
 // Wifi credentials are in a MyCreds.h file that must reside in /<HOME>/.platformio/lib/MyCreds/MyCreds.h
 // see attic/MyCredsHackffm.h for an example
 #if defined __has_include
-#  if __has_include (<MyCreds.h>)
-#    include <MyCreds.h>  // Define WIFI_SSID and WIFI_PASSWORD here - see file in Attic for example
+#  if __has_include (<MyCredsHackffm.h>)
+#    include <MyCredsHackffm.h>  // Define WIFI_SSID and WIFI_PASSWORD here - see file in Attic for example
 #  endif
 #endif
 
 #include <hackffm_badge_lib.h>
 
-const char* hostname = "hackffm-badge";
+const char* hostname = "hackffm-badge"; // add MAC address to make it unique
 char badgeUserName[128] = "$cHackFFM$nBadge";
  
 void setup() {
@@ -26,15 +26,18 @@ void setup() {
   elapsedMillis logoTimer = 0;
   while(logoTimer < 6000) {
     delay(10);
-    if(HackFFMBadge.but0PressedFor() > 1000) {
+    if(HackFFMBadge.but0PressedSince() > 1000) {
       #ifdef WIFI_SSID
       LL_Log.println("Long Press");
+      Badge.drawString("$!$c$8$+$+$+$+$+$+$+Connecting$nto WiFi..");
       delay(10);
       HackFFMBadge.connectWifi(WIFI_SSID, WIFI_PASSWORD, hostname);
-      char buf[128]; sprintf(buf, "$!$c$8$+$+$+IP: %s", WiFi.localIP().toString().c_str());
+      char buf[128]; sprintf(buf, "$!$c$6$+$+$+$+$+$+IP: %s", WiFi.localIP().toString().c_str());
       Badge.drawString(buf);
       Badge.setBoardLED(2, 0, 8); // pink
       delay(8000);
+      Badge.but0PressedFor(); // clear button press
+      break;
       #endif
     }
   }
@@ -55,6 +58,10 @@ void setup() {
 
   // Automatically choose a new random direction to look
   Badge.face().RandomLook = true;
+
+  // try to load user name from file
+  String loadUserName = Badge.readFile("/name.txt");
+  if(loadUserName.length() > 0) strcpy(badgeUserName, loadUserName.c_str());
 
 }
 
@@ -99,7 +106,10 @@ void loop() {
       u8g2.clearBuffer(); 
       u8g2.setDrawColor(1);
       //Badge.face().UpdateBuffer();
-      Badge.drawString(badgeUserName);
+      String showuser = "$c$3$+$+$+$+";
+      showuser.concat(badgeUserName);
+      showuser.replace(" ", "$n");
+      Badge.drawString(showuser.c_str());
       
       u8g2.sendBuffer(); 
 
@@ -166,12 +176,12 @@ void loop() {
         Badge.face().Behavior.SetEmotion((eEmotions)addr /* moods[addr] */, (float)(data % 21) / 20.0 );
       }
     }
-    if(LL_Log.receiveLine[0]=='u') {
+    if(LL_Log.receiveLine[0]=='n') {
       char data[128];
       if(sscanf(&LL_Log.receiveLine[1],"%127[^\n]",&data)>=1) {
         strcpy(badgeUserName, data);
         LL_Log.printf("Bade name: %s\r\n",  badgeUserName);
-
+        Badge.writeFile("/name.txt", badgeUserName);
       }
     } 
   }

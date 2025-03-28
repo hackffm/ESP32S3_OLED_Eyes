@@ -126,6 +126,34 @@ void HackFFMBadgeLib::listDir(const char *dirname, uint8_t levels) {
   Serial.printf("Total space: %d, used space: %d, free space: %d\r\n", t, u, t - u);
 }
 
+// Function to write a string to a file
+bool HackFFMBadgeLib::writeFile(const char *path, const String &data) {
+  File file = LittleFS.open(path, "w"); // "w" overwrite file
+  if (!file) {
+    LL_Log.println("Can't open file to write");
+      return false;
+  }
+  file.print(data);
+  file.close();
+  LL_Log.println("File written");
+  return true;
+}
+
+// Function to read a file and return the content as a string
+String HackFFMBadgeLib::readFile(const char *path) {
+  File file = LittleFS.open(path, "r");  
+  String data = "";
+  if (!file) {
+    LL_Log.println("Can't open file for reading");
+      return data;
+  }
+  while (file.available()) {
+      data += (char)file.read();
+  }
+  file.close();
+  return data;
+}
+
 void HackFFMBadgeLib::writeTone(uint32_t freq /* 0 to stop */, uint32_t duty) {
   if(pinAudio < 0) return;
   #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
@@ -286,6 +314,7 @@ void HackFFMBadgeLib::drawString(const char *str, int x, int y, int dy, bool noD
           case 'd': u8g2.setFont(u8g2_font_fur14_tf); break; // 11.5
           case 'e': u8g2.setFont(u8g2_font_fub14_tf); break; // 11.5
           case 'f': u8g2.setFont(u8g2_font_chargen_92_tf); break; //10.9
+          case 's': u8g2.setFont(u8g2_font_sticker100complete_te); break; // ?
           case 'i': u8g2.setFont(u8g2_font_m2icon_9_tf); break;
                              
         }
