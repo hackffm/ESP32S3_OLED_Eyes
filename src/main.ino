@@ -225,6 +225,9 @@ void processCommands() {
       } else {
         LL_Log.printf("Bade name: %s\r\n",  badgeUserName);
       }
+
+      CurrentActionTimer = 0;
+      CurrentAction = 3; // show name
     } 
     if(LL_Log.receiveLine[0]=='i') {
       int data;
