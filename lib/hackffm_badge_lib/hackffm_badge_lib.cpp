@@ -524,11 +524,52 @@ void HackFFMBadgeLib::detectHardware() {
 
   // play tone duh-duett
   setPowerAudio(true);
+
+  /*
   delay(100);
   writeTone(784); // G5
   delay(300);
   writeTone(1047); // C6
   delay(300);
+  */
+  
+
+  delay(500);
+  writeTone(660);
+  delay(100);
+  writeTone(0);
+  delay(150);
+
+  writeTone(660);
+  delay(100);
+  writeTone(0);
+  delay(300);
+
+  writeTone(660);
+  delay(100);
+  writeTone(0);
+  delay(300);
+
+  writeTone(510);
+  delay(100);
+  writeTone(0);
+  delay(100);
+
+  writeTone(660);
+  delay(100);
+  writeTone(0);
+  delay(300);
+
+  writeTone(770);
+  delay(100);
+  writeTone(0);
+  delay(550);
+
+  writeTone(380);
+  delay(100);
+  writeTone(0);
+  delay(575);
+
   writeTone(0); // stop tone
   setPowerAudio(false);
 
