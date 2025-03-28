@@ -14,7 +14,6 @@
 
 #include <hackffm_badge_lib.h>
 
-const char* hostname = "hackffm-badge"; // add MAC address to make it unique
 char badgeUserName[128] = "$cHackFFM$nBadge";
  
 void setup() {
@@ -31,7 +30,7 @@ void setup() {
       LL_Log.println("Long Press");
       Badge.drawString("$!$c$8$+$+$+$+$+$+$+Connecting$nto WiFi..");
       delay(10);
-      HackFFMBadge.connectWifi(WIFI_SSID, WIFI_PASSWORD, hostname);
+      HackFFMBadge.connectWifi(WIFI_SSID, WIFI_PASSWORD);
       char buf[128]; sprintf(buf, "$!$c$6$+$+$+$+$+$+IP: %s", WiFi.localIP().toString().c_str());
       Badge.drawString(buf);
       Badge.setBoardLED(2, 0, 8); // pink
@@ -68,7 +67,8 @@ void setup() {
 int CurrentAction = 0;
 int CurrentActionDuration = 1000;
 elapsedMillis CurrentActionTimer = 0;
-
+uint32_t idleTime = 0;
+bool debugTouch = false;
 
 void loop() {
   static elapsedMillis actionTimer = 0;
@@ -82,7 +82,7 @@ void loop() {
   }
   switch(CurrentAction) {
     case 0: 
-      CurrentActionDuration = 5000;
+      CurrentActionDuration = 30000;
       Badge.drawFace();
       break;
     case 1: 
@@ -90,7 +90,7 @@ void loop() {
       Badge.drawBMP("/badge.bmp");
       break;
     case 2: 
-      CurrentActionDuration = 5000;
+      CurrentActionDuration = 30000;
       // Paint Face like TV raster lines
       u8g2.clearBuffer(); // <10us
       Badge.face().UpdateBuffer(); // ~450us
@@ -102,7 +102,7 @@ void loop() {
       u8g2.sendBuffer(); // ~17.1ms
       break;
     case 3: 
-      CurrentActionDuration = 5000;
+      CurrentActionDuration = 3000;
       u8g2.clearBuffer(); 
       u8g2.setDrawColor(1);
       //Badge.face().UpdateBuffer();
@@ -116,9 +116,6 @@ void loop() {
       break;
   }
   
-
- 
-
   LL_Log.update(); 
 
   
@@ -133,10 +130,25 @@ void loop() {
       LL_Log.printf("PressedFor: %d, PressedSince: %d\r\n", pressedFor, pressedSince);
     }
 
-    if(pressedFor > 1000) {
-      LL_Log.println("Long Press");
+    if(pressedFor > 10000) {
+      // Try update firmware from web
+      Badge.drawString("$!$c$8$+$+$+$+$+$+$+Try update...");
+      Badge.tryToUpdate();
+    } else if(pressedFor > 5000) {
+      Badge.drawString("$!$c$8$+$+$+$+$+$+$+Power off...");
       delay(1000);
       HackFFMBadge.powerOff();
+    } else if(pressedFor > 1000) {
+      LL_Log.println("Long Press");
+      debugTouch = !debugTouch;
+      if(debugTouch) {
+        LL_Log.println("Debug Touch ON");
+        Badge.drawString("$!$c$8$+$+$+$+$+$+$+Debug Touch ON");
+      } else {
+        LL_Log.println("Debug Touch OFF");
+        Badge.drawString("$!$c$8$+$+$+$+$+$+$+Debug Touch OFF");
+      }
+      delay(1000);
     } else if(pressedFor > 0) {
       LL_Log.println("Short Press");
       emo++;
@@ -145,12 +157,29 @@ void loop() {
     }
 
     if(HackFFMBadge.isNewTouchDataAvailable()) {
-      float x = (float)HackFFMBadge.touch[0].getTouchValue() / 100.0 - (float)HackFFMBadge.touch[1].getTouchValue() / 100.0;
-      float y = (float)HackFFMBadge.touch[2].getTouchValue() / 100.0 - (float)HackFFMBadge.touch[3].getTouchValue() / 100.0;
-      LL_Log.printf("Touch LU:%d LD:%d RU:%d RD:%d %f:%f\r\n", HackFFMBadge.touch[0].getTouchValue(), 
-        HackFFMBadge.touch[1].getTouchValue(), HackFFMBadge.touch[2].getTouchValue(), 
-        HackFFMBadge.touch[3].getTouchValue(),x,y);
-      Badge.face().Look.LookAt(x, y); 
+      //float x = (float)HackFFMBadge.touch[0].getTouchValue() / 100.0 - (float)HackFFMBadge.touch[1].getTouchValue() / 100.0;
+      //float y = (float)HackFFMBadge.touch[2].getTouchValue() / 100.0 - (float)HackFFMBadge.touch[3].getTouchValue() / 100.0;
+      float lu = (float)HackFFMBadge.touch[0].getTouchValue() / 50.0;
+      float ld = (float)HackFFMBadge.touch[1].getTouchValue() / 50.0;
+      float ru = (float)HackFFMBadge.touch[2].getTouchValue() / 50.0;
+      float rd = (float)HackFFMBadge.touch[3].getTouchValue() / 50.0;
+      float x = (-lu) + (-ld) + (ru) + (rd);
+      float y = (-lu) + (-ru) + (ld) + (rd);
+      if(y > 3.0) {
+        CurrentActionTimer = 0;
+        CurrentAction = 3; // show name
+      }
+      x = constrain(x, -2.0, 2.0);
+      y = constrain(y, -2.0, 2.0);
+      if(debugTouch) {
+        LL_Log.printf("Touch LU:%d LD:%d RU:%d RD:%d %f:%f\r\n", HackFFMBadge.touch[0].getTouchValue(), 
+          HackFFMBadge.touch[1].getTouchValue(), HackFFMBadge.touch[2].getTouchValue(), 
+          HackFFMBadge.touch[3].getTouchValue(),x,y);
+        u8g2.setDrawColor(1);
+        u8g2.drawCircle(int(x*128+64), int(y*64+32), 4);
+        u8g2.sendBuffer();   
+      }
+      Badge.face().Look.LookAt(-x, -y); 
     }
 
     // Animate antenna LED
@@ -159,7 +188,18 @@ void loop() {
     Badge.setAntennaLED(j%32, j%16, j%20);
   }
 
+  // Process commands from the command line
+  processCommands();
 
+  if(idleTime > 0) {
+    esp_sleep_enable_timer_wakeup(idleTime * 1000);
+    esp_light_sleep_start();
+  }
+}
+
+
+// Process commands from the command line
+void processCommands() {
   if(LL_Log.receiveLineAvailable()) {
     LL_Log.println(LL_Log.receiveLine);
     if(LL_Log.receiveLine[0]=='d') {
@@ -182,9 +222,16 @@ void loop() {
         strcpy(badgeUserName, data);
         LL_Log.printf("Bade name: %s\r\n",  badgeUserName);
         Badge.writeFile("/name.txt", badgeUserName);
+      } else {
+        LL_Log.printf("Bade name: %s\r\n",  badgeUserName);
       }
     } 
+    if(LL_Log.receiveLine[0]=='i') {
+      int data;
+      if(sscanf(&LL_Log.receiveLine[1],"%d",&data)>=1) {
+        LL_Log.printf("Idle time: %d\r\n",  data);
+        idleTime = data;
+      }
+    }
   }
-
-
 }

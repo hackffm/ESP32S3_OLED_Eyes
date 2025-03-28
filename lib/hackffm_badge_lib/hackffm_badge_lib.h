@@ -105,10 +105,13 @@ class HackFFMBadgeLib {
     static const int NUM_TOUCH_PINS = 4;
     touchProcessor touch[NUM_TOUCH_PINS] = {-1, -1, -1, -1}; // LU, LD, RU, RD
 
-    void connectWifi(const char* ssid, const char* password, const char* hostname);
-    void setupOTA(const char* hostname);
+    bool connectWifi(const char* ssid, const char* password);
+    void setupOTA();
+    void tryToUpdate();
 
     bool OTAinProgress = false;
+
+    char badgeHostname[32] = "hackffm-badge\0"; // add MAC address to make it unique
 
   private:
     void detectHardware();

@@ -1,4 +1,4 @@
-// hackffm_badge_lib.cpp
+// hackffm_badge_lib.cpp (cmd+K + cmd+0 to collapse)
 #include "hackffm_badge_lib.h"
 
 #include <WiFi.h>
@@ -10,6 +10,8 @@
 #include <FS.h>
 #include <ArduinoOTA.h>
 #include <ESPmDNS.h>
+#include <HTTPClient.h>
+#include <Update.h>
 
 #include "LL_Lib.h"
 
@@ -34,6 +36,9 @@ uint8_t u8log_buffer[U8LOG_WIDTH*U8LOG_HEIGHT];
 // Use these for Audio output
 #define LEDC_CHANNEL_AUDIO 0
 #define LEDC_RESOLUTION_AUDIO 8
+
+#define FIRMWARE_URL "http://192.168.4.1/hackffmbadgev1_fw.bin"  // URL zur Firmware
+#define VERSION_URL  "http://192.168.4.1/hackffmbadgev1_vers.txt"  // URL zur Versionsdatei
 
 void HackFFMBadgeLib::begin() {
   // Conserve power (to allow CR123 battery operation)
@@ -266,7 +271,7 @@ void HackFFMBadgeLib::drawBMP(const char *filename) {
  */
 void HackFFMBadgeLib::drawString(const char *str, int x, int y, int dy, bool noDraw) {
   if(!OledAddress) return;
-  char buf[127];
+  char buf[512];
   char c;
   int  idx = 0;
   int w = u8g2.getDisplayWidth();
@@ -314,6 +319,7 @@ void HackFFMBadgeLib::drawString(const char *str, int x, int y, int dy, bool noD
           case 'd': u8g2.setFont(u8g2_font_fur14_tf); break; // 11.5
           case 'e': u8g2.setFont(u8g2_font_fub14_tf); break; // 11.5
           case 'f': u8g2.setFont(u8g2_font_chargen_92_tf); break; //10.9
+          case 'g': u8g2.setFont(u8g2_font_inr21_mf); break; // ?
           case 's': u8g2.setFont(u8g2_font_sticker100complete_te); break; // ?
           case 'i': u8g2.setFont(u8g2_font_m2icon_9_tf); break;
                              
@@ -368,8 +374,10 @@ void HackFFMBadgeLib::initOLED() {
   //u8g2.sendF("ca", 0xd9, 0x2f);
   //u8g2.sendF("ca", 0xaf); // reactivate if display turns off (SH1106 need it)
   //u8g2.setContrast(0x32); // u8g2.sendF("ca", 0x81, 32);
+  String BootMsg = "$!$c$6HackFFM Badge V1\n";
+  BootMsg += String(__DATE__) + "\n" + String(__TIME__);
 
-  drawString("$!$c$f$+$+$+HackFFM\n$+Badge V1");
+  drawString(BootMsg.c_str());
 
   u8g2log.begin(U8LOG_WIDTH, U8LOG_HEIGHT, u8log_buffer);	// assign only buffer, update full manual
   u8g2log.print("u8g2log:\r\n");
@@ -643,8 +651,9 @@ uint32_t HackFFMBadgeLib::but0PressedFor() {
   return ret;
 }
 
-void HackFFMBadgeLib::connectWifi(const char* ssid, const char* password, const char* hostname) {
-  WiFi.setHostname(hostname);
+bool HackFFMBadgeLib::connectWifi(const char* ssid, const char* password) {
+  bool ret = false;
+  WiFi.setHostname(badgeHostname);
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
   WiFi.setTxPower(WIFI_POWER_7dBm);
@@ -661,14 +670,17 @@ void HackFFMBadgeLib::connectWifi(const char* ssid, const char* password, const 
     LL_Log.println(ssid);
     LL_Log.print("IP address: ");
     LL_Log.println(WiFi.localIP());
-    setupOTA(hostname);
+    setupOTA();
+    ret = true;
   } else {
     LL_Log.println("Connection failed.");
+    WiFi.disconnect();
+    WiFi.mode(WIFI_OFF);
   }
-  
+  return ret;
 }
 
-void HackFFMBadgeLib::setupOTA(const char* hostname) {
+void HackFFMBadgeLib::setupOTA() {
   ArduinoOTA.onStart([]() {
     String type;
     if (ArduinoOTA.getCommand() == U_FLASH) {
@@ -703,8 +715,44 @@ void HackFFMBadgeLib::setupOTA(const char* hostname) {
   });
   ArduinoOTA.begin();
   
-  MDNS.begin(hostname);
+  MDNS.begin(badgeHostname);
   MDNS.addService("debug", "tcp", 2222);
+}
+
+void HackFFMBadgeLib::tryToUpdate() {
+  WiFi.disconnect();
+  if (connectWifi("HACKFFM_BADGE_UPDATER", "")) {
+    LL_Log.println("Connected to HACKFFM_BADGE_UPDATER");
+    LL_Log.println("Starting OTA update...");
+    HTTPClient http;
+    http.begin(VERSION_URL);
+    int httpCode = http.GET();
+    if (httpCode == HTTP_CODE_OK) {
+        String version = http.getString();
+        LL_Log.println("Firmware version on server: " + version);
+    }
+    http.end();
+    http.begin(FIRMWARE_URL);
+    httpCode = http.GET();
+    if (httpCode == HTTP_CODE_OK) {
+        int contentLength = http.getSize();
+        if (contentLength > 0) {
+            WiFiClient * stream = http.getStreamPtr();
+            if (Update.begin(contentLength)) {
+                size_t written = Update.writeStream(*stream);
+                if (written == contentLength && Update.end()) {
+                    ESP.restart();
+                }
+            }
+        }
+    }
+    http.end();
+    LL_Log.println("OTA update finished.");
+  } else {
+    LL_Log.println("Failed to connect to HACKFFM_BADGE_UPDATER");
+  }
+  WiFi.disconnect();
+  WiFi.mode(WIFI_OFF);
 }
 
 float mapFloat(float x, float in_min, float in_max, float out_min, float out_max) {
