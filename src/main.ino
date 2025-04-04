@@ -1,14 +1,14 @@
 /**
    The MIT License (MIT) (but poisoned by GPL in the Face Library)
    Hackerspace-FFM e.V. Badge V1
-   2025-03-25 Lutz Lisseck
+   2025-04-02 Lutz Lisseck
 */
 
 // Wifi credentials are in a MyCreds.h file that must reside in /<HOME>/.platformio/lib/MyCreds/MyCreds.h
 // see attic/MyCredsHackffm.h for an example
 #if defined __has_include
 #  if __has_include (<MyCredsHackffm.h>)
-#    include <MyCredsHackffm.h>  // Define WIFI_SSID and WIFI_PASSWORD here - see file in Attic for example
+#    include <MyCreds.h>  // Define WIFI_SSID and WIFI_PASSWORD here - see file in Attic for example
 #  endif
 #endif
 
@@ -74,6 +74,9 @@ void loop() {
   static elapsedMillis actionTimer = 0;
 
   Badge.update();  // <50us
+
+  // Clear display buffer, paint first layer but dont send it to display
+  u8g2.clearBuffer(); // <10us
   
   if(CurrentActionTimer > CurrentActionDuration) {
     CurrentActionTimer = 0;
@@ -83,35 +86,33 @@ void loop() {
   switch(CurrentAction) {
     case 0: 
       CurrentActionDuration = 30000;
-      Badge.drawFace();
+      Badge.face().UpdateBuffer(); // ~450us
       break;
     case 1: 
       CurrentActionDuration = 1000;
-      Badge.drawBMP("/badge.bmp");
+      Badge.drawBMP("/badge.bmp", true);
       break;
     case 2: 
       CurrentActionDuration = 30000;
       // Paint Face like TV raster lines
-      u8g2.clearBuffer(); // <10us
+      
       Badge.face().UpdateBuffer(); // ~450us
       u8g2.setDrawColor(0);
       for(int y = 0; y < 64; y+=2) {
         u8g2.drawHLine(0,y,128);
       }
       u8g2.setDrawColor(1);
-      u8g2.sendBuffer(); // ~17.1ms
+
       break;
     case 3: 
       CurrentActionDuration = 3000;
-      u8g2.clearBuffer(); 
+       
       u8g2.setDrawColor(1);
       //Badge.face().UpdateBuffer();
       String showuser = "$c$3$+$+$+$+";
       showuser.concat(badgeUserName);
       showuser.replace(" ", "$n");
-      Badge.drawString(showuser.c_str());
-      
-      u8g2.sendBuffer(); 
+      Badge.drawString(showuser.c_str(),0,0,2,true);
 
       break;
   }
@@ -156,15 +157,16 @@ void loop() {
       Badge.face().Behavior.GoToEmotion((eEmotions)emo);
     }
 
-    if(HackFFMBadge.isNewTouchDataAvailable()) {
-      //float x = (float)HackFFMBadge.touch[0].getTouchValue() / 100.0 - (float)HackFFMBadge.touch[1].getTouchValue() / 100.0;
-      //float y = (float)HackFFMBadge.touch[2].getTouchValue() / 100.0 - (float)HackFFMBadge.touch[3].getTouchValue() / 100.0;
-      float lu = (float)HackFFMBadge.touch[0].getTouchValue() / 50.0;
-      float ld = (float)HackFFMBadge.touch[1].getTouchValue() / 50.0;
-      float ru = (float)HackFFMBadge.touch[2].getTouchValue() / 50.0;
-      float rd = (float)HackFFMBadge.touch[3].getTouchValue() / 50.0;
-      float x = (-lu) + (-ld) + (ru) + (rd);
-      float y = (-lu) + (-ru) + (ld) + (rd);
+        // Animate antenna LED
+        static uint8_t j = 0;
+        j++;
+        Badge.setAntennaLED(j%32, j%16, j%20);
+  }
+
+  /*  if(HackFFMBadge.isNewTouchDataAvailable()) */ 
+  {
+      float x = Badge.lastTouchX;
+      float y = Badge.lastTouchY;
       if(y > 3.0) {
         CurrentActionTimer = 0;
         CurrentAction = 3; // show name
@@ -172,21 +174,25 @@ void loop() {
       x = constrain(x, -2.0, 2.0);
       y = constrain(y, -2.0, 2.0);
       if(debugTouch) {
-        LL_Log.printf("Touch LU:%d LD:%d RU:%d RD:%d %f:%f\r\n", HackFFMBadge.touch[0].getTouchValue(), 
-          HackFFMBadge.touch[1].getTouchValue(), HackFFMBadge.touch[2].getTouchValue(), 
-          HackFFMBadge.touch[3].getTouchValue(),x,y);
+        LL_Log.printf("Touch LU:%.2f LD:%.2f RU:%.2f RD:%.2f %.2f:%.2f\r\n", HackFFMBadge.lastTouchLU, HackFFMBadge.lastTouchLD,
+          HackFFMBadge.lastTouchRU, HackFFMBadge.lastTouchRD, x, y);
+        u8g2.setDrawColor(0);
+        u8g2.drawCircle(int(x*128.0+64), int(y*64.0+32), 4);
         u8g2.setDrawColor(1);
-        u8g2.drawCircle(int(x*128+64), int(y*64+32), 4);
-        u8g2.sendBuffer();   
+        u8g2.drawCircle(int(x*128.0+64), int(y*64.0+32), 5);
+        if(Badge.isTouchLU()) u8g2.drawBox(0, 0, 2, 32);
+        if(Badge.isTouchLD()) u8g2.drawBox(0, 32, 2, 32);
+        if(Badge.isTouchRU()) u8g2.drawBox(126, 0, 2, 32);
+        if(Badge.isTouchRD()) u8g2.drawBox(126, 32, 2, 32);
+        if(Badge.isTouchLUStrong()) u8g2.drawBox(2, 0, 8, 8);
+        if(Badge.isTouchRUStrong()) u8g2.drawBox(118, 0, 8, 8);
+           
       }
       Badge.face().Look.LookAt(-x, -y); 
     }
 
-    // Animate antenna LED
-    static uint8_t j = 0;
-    j++;
-    Badge.setAntennaLED(j%32, j%16, j%20);
-  }
+
+  
 
   // Process commands from the command line
   processCommands();
@@ -195,6 +201,9 @@ void loop() {
     esp_sleep_enable_timer_wakeup(idleTime * 1000);
     esp_light_sleep_start();
   }
+  
+  // Write to display
+  u8g2.sendBuffer();
 }
 
 

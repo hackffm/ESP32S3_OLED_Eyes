@@ -5,8 +5,11 @@
 #include <Arduino.h>
 #include <elapsedMillis.h>
 #include <Freenove_WS2812_Lib_for_ESP32.h>
-#include <LittleFS.h>
-#include <FS.h>
+#include "FS.h"
+#include <LittleFS.h> // For LittleFS
+//#include <SPIFFS.h>   // For SPIFFS
+//#include <FFat.h>     // For FATFS
+
 #include <U8g2lib.h>
 #include "Face.h"
 #include "LL_Lib.h"
@@ -28,7 +31,11 @@ class touchProcessor {
       if(_pin < 0) return;
       _lastTouchValue = touchRead(_pin)/16;
       if(_touchAvgValue == 0) _touchAvgValue = _lastTouchValue;
-      _touchAvgValue = _touchAvgValue * 0.95 + _lastTouchValue * 0.05;
+      if(_touched) {
+        _touchAvgValue = _touchAvgValue * 0.99 + _lastTouchValue * 0.01;
+      } else {
+        _touchAvgValue = _touchAvgValue * 0.95 + _lastTouchValue * 0.05;
+      }
       _touchValue = _lastTouchValue - _touchAvgValue;
       if(_touchValue > 20) {
         _touched = true;
@@ -71,6 +78,18 @@ class HackFFMBadgeLib {
     uint32_t but0PressedFor();   // 0 = no event or still pressed, otherwise time in ms of last press, cleared after read
     
     bool isNewTouchDataAvailable() { bool r = touchUpdated; touchUpdated = false; return r; }
+    float lastTouchX = 0.0;
+    float lastTouchY = 0.0;
+    float lastTouchLU = 0.0;  // LU = left up
+    float lastTouchLD = 0.0;  // LD = left down
+    float lastTouchRU = 0.0;  // RU = right up
+    float lastTouchRD = 0.0;  // RD = right down
+    bool isTouchLU() { return touch[0].isTouched(); }
+    bool isTouchLD() { return touch[1].isTouched(); }
+    bool isTouchRU() { return touch[2].isTouched(); }
+    bool isTouchRD() { return touch[3].isTouched(); }
+    bool isTouchLUStrong() { return touch[0].getTouchValue() > 100; }
+    bool isTouchRUStrong() { return touch[2].getTouchValue() > 100; }
 
     void listDir(const char *dirname = "/", uint8_t levels = 1);
     bool writeFile(const char *path, const String &data);
@@ -93,9 +112,9 @@ class HackFFMBadgeLib {
       */
     void drawString(const char *str, int x = 0, int y = 0, int dy = 2, bool noDraw = false); 
 
-    void drawLog();
+    void drawLog(bool noDraw = false);
 
-    void drawBMP(const char *filename);
+    void drawBMP(const char *filename, bool noDraw = false);
 
   // quasi-private, usually no need to use directly 
     Freenove_ESP32_WS2812* freenoveAntennaLED = nullptr;  
@@ -112,6 +131,8 @@ class HackFFMBadgeLib {
     bool OTAinProgress = false;
 
     char badgeHostname[32] = "hackffm-badge\0"; // add MAC address to make it unique
+
+    fs::FS &filesystem = LittleFS; // default LittleFS
 
   private:
     void detectHardware();

@@ -6,8 +6,7 @@
 #include <WiFiMulti.h>
 #include <elapsedMillis.h>
 #include <Wire.h>
-#include <LittleFS.h>
-#include <FS.h>
+
 #include <ArduinoOTA.h>
 #include <ESPmDNS.h>
 #include <HTTPClient.h>
@@ -55,9 +54,9 @@ void HackFFMBadgeLib::begin() {
   // Perform hardware detection
   detectHardware();
 
-  // Initialize LittleFS
+  // Initialize filesystem
   if(!LittleFS.begin()) {
-    Serial.println("LittleFS Mount Failed");
+    Serial.println("filesystem Mount Failed");
     return;
   }
   listDir("/", 0);
@@ -78,6 +77,12 @@ void HackFFMBadgeLib::update() {
     for(int i = 0; i < NUM_TOUCH_PINS; i++) {
       touch[i].update();
     }
+    lastTouchLU = (float)touch[0].getTouchValue() / 50.0;
+    lastTouchLD = (float)touch[1].getTouchValue() / 50.0;
+    lastTouchRU = (float)touch[2].getTouchValue() / 50.0;
+    lastTouchRD = (float)touch[3].getTouchValue() / 50.0;
+    lastTouchX = (-lastTouchLU) + (-lastTouchLD) + (lastTouchRU) + (lastTouchRD);
+    lastTouchY = (-lastTouchLU) + (-lastTouchRU) + (lastTouchLD) + (lastTouchRD);
     touchUpdated = true;
   }
 
@@ -99,7 +104,7 @@ void HackFFMBadgeLib::update() {
 void HackFFMBadgeLib::listDir(const char *dirname, uint8_t levels) {
   Serial.printf("Listing directory: %s\r\n", dirname);
 
-  fs::File root = LittleFS.open(dirname);
+  fs::File root = filesystem.open(dirname);
   if (!root) {
     Serial.println("- failed to open directory");
     return;
@@ -128,12 +133,13 @@ void HackFFMBadgeLib::listDir(const char *dirname, uint8_t levels) {
 
   size_t t = LittleFS.totalBytes();
   size_t u = LittleFS.usedBytes();
+  
   Serial.printf("Total space: %d, used space: %d, free space: %d\r\n", t, u, t - u);
 }
 
 // Function to write a string to a file
 bool HackFFMBadgeLib::writeFile(const char *path, const String &data) {
-  File file = LittleFS.open(path, "w"); // "w" overwrite file
+  File file = filesystem.open(path, "w"); // "w" overwrite file
   if (!file) {
     LL_Log.println("Can't open file to write");
       return false;
@@ -146,7 +152,7 @@ bool HackFFMBadgeLib::writeFile(const char *path, const String &data) {
 
 // Function to read a file and return the content as a string
 String HackFFMBadgeLib::readFile(const char *path) {
-  File file = LittleFS.open(path, "r");  
+  File file = filesystem.open(path, "r");  
   String data = "";
   if (!file) {
     LL_Log.println("Can't open file for reading");
@@ -179,7 +185,7 @@ void HackFFMBadgeLib::writeTone(uint32_t freq /* 0 to stop */, uint32_t duty) {
   #endif
 }
 
-void HackFFMBadgeLib::drawLog() {
+void HackFFMBadgeLib::drawLog(bool noDraw) {
   // Align Log-box from lower-left corner
   int logbox_y = u8g2.getDisplayHeight() - (U8LOG_HEIGHT * U8LOG_FONT_Y) - 3;
   u8g2.setFont(U8LOG_FONT);
@@ -191,7 +197,8 @@ void HackFFMBadgeLib::drawLog() {
   u8g2.drawBox(1,logbox_y+1,u8g2.getDisplayWidth()-2,u8g2.getDisplayHeight()-(logbox_y+2));
   u8g2.setDrawColor(1);
   u8g2.drawLog(2,logbox_y+1,u8g2log);
-  u8g2.sendBuffer();
+  if(!noDraw) u8g2.sendBuffer();  
+  u8g2.setDrawColor(1);
 }
 
 // BMP-Header-Struktur
@@ -207,8 +214,8 @@ struct __attribute__((packed)) BMPHeader {
   uint16_t bitsPerPixel;
 };
 
-void HackFFMBadgeLib::drawBMP(const char *filename) {
-  File file = LittleFS.open(filename, "r");
+void HackFFMBadgeLib::drawBMP(const char *filename, bool noDraw) {
+  File file = filesystem.open(filename, "r");
   if (!file) {
       Serial.println("Can't open file!");
       return;
@@ -240,7 +247,7 @@ void HackFFMBadgeLib::drawBMP(const char *filename) {
   int rowSize = ((width + 31) / 32) * 4;
   uint8_t rowBuffer[rowSize];
 
-  u8g2.clearBuffer(); 
+  //u8g2.clearBuffer(); 
 
   for (int y = 0; y < height; y++) {
       int rowIndex = flip ? (height - 1 - y) : y;
@@ -257,7 +264,7 @@ void HackFFMBadgeLib::drawBMP(const char *filename) {
   }
   file.close();
 
-  u8g2.sendBuffer();  
+  if(!noDraw) u8g2.sendBuffer();  
   u8g2.setDrawColor(1);
 }
 
