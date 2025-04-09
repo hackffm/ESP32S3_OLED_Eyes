@@ -40,6 +40,12 @@ uint8_t u8log_buffer[U8LOG_WIDTH*U8LOG_HEIGHT];
 #define VERSION_URL  "http://192.168.4.1/hackffmbadgev1_vers.txt"  // URL zur Versionsdatei
 
 void HackFFMBadgeLib::begin() {
+  // a little less sound at boot
+  pinMode(5, OUTPUT); digitalWrite(5, LOW); 
+  pinMode(6, OUTPUT); digitalWrite(6, LOW);
+  pinMode(7, OUTPUT); digitalWrite(7, LOW);
+  
+  // Power on OLED
   // Conserve power (to allow CR123 battery operation)
   WiFi.mode(WIFI_OFF);
   delay(1);
@@ -543,6 +549,8 @@ void HackFFMBadgeLib::detectHardware() {
 
   delay(500);
   writeTone(660);
+
+  /*
   delay(100);
   writeTone(0);
   delay(150);
@@ -575,7 +583,10 @@ void HackFFMBadgeLib::detectHardware() {
   writeTone(380);
   delay(100);
   writeTone(0);
+   */
   delay(575);
+
+ 
 
   writeTone(0); // stop tone
   setPowerAudio(false);
