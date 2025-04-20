@@ -1,0 +1,1 @@
+Delete this file with command dstartsnd.txt to disable startsound.

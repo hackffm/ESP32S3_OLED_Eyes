@@ -1,25 +1,23 @@
 /**
    The MIT License (MIT) (but poisoned by GPL in the Face Library)
    Hackerspace-FFM e.V. Badge V1
-   2025-04-02 Lutz Lisseck
+   2025-04-20 Lutz Lisseck
 */
 
 // Wifi credentials are in a MyCreds.h file that must reside in /<HOME>/.platformio/lib/MyCreds/MyCreds.h
-// see attic/MyCredsHackffm.h for an example
+// see attic/MyCreds.h for an example
 #if defined __has_include
-#  if __has_include (<MyCredsHackffm.h>)
+#  if __has_include (<MyCreds.h>)
 #    include <MyCreds.h>  // Define WIFI_SSID and WIFI_PASSWORD here - see file in Attic for example
 #  endif
 #endif
 
 #include <hackffm_badge_lib.h>
-
-char badgeUserName[128] = "$cHackFFM$nBadge";
  
 void setup() {
   HackFFMBadge.begin();
 
-  LL_Log.begin(115200, 2222); // Serial baud (not used), TCP Port
+  if(Badge.filesystem.exists("/startsnd.txt")) Badge.playStartSound();
 
   Badge.drawBMP("/badge.bmp");
   elapsedMillis logoTimer = 0;
@@ -40,27 +38,6 @@ void setup() {
       #endif
     }
   }
-  
-
-  // Assign a weight to each emotion
-  Badge.face().Behavior.GoToEmotion(eEmotions::Normal);
-  Badge.face().Behavior.SetEmotion(eEmotions::Normal, 1.0);
-  Badge.face().Behavior.SetEmotion(eEmotions::Happy, 0.0);
-  Badge.face().Behavior.SetEmotion(eEmotions::Glee, 0.0);
-  // Automatically switch between behaviours (selecting new behaviour randomly based on the weight assigned to each emotion)
-  Badge.face().RandomBehavior = false;
-
-  // Automatically blink
-  Badge.face().RandomBlink = true;
-  // Set blink rate
-  Badge.face().Blink.Timer.SetIntervalMillis(4000);
-
-  // Automatically choose a new random direction to look
-  Badge.face().RandomLook = true;
-
-  // try to load user name from file
-  String loadUserName = Badge.readFile("/name.txt");
-  if(loadUserName.length() > 0) strcpy(badgeUserName, loadUserName.c_str());
 
 }
 
@@ -110,7 +87,7 @@ void loop() {
       u8g2.setDrawColor(1);
       //Badge.face().UpdateBuffer();
       String showuser = "$c$3$+$+$+$+";
-      showuser.concat(badgeUserName);
+      showuser.concat(Badge.userName);
       showuser.replace(" ", "$n");
       Badge.drawString(showuser.c_str(),0,0,2,true);
 
@@ -154,7 +131,9 @@ void loop() {
       LL_Log.println("Short Press");
       emo++;
       if(emo>=EMOTIONS_COUNT) emo = 0;
+      Badge.face().RandomBehavior = false; // Stop random emotions
       Badge.face().Behavior.GoToEmotion((eEmotions)emo);
+      LL_Log.printf("Set emotion: %s\r\n", Badge.face().Behavior.GetEmotionName((eEmotions)emo));
     }
 
         // Animate antenna LED
@@ -167,9 +146,25 @@ void loop() {
   {
       float x = Badge.lastTouchX;
       float y = Badge.lastTouchY;
+      if(y < -3.0) {
+        CurrentActionTimer = 0;
+        CurrentAction = 3; // show name
+        if(Badge.tryFindDoor() == true) {
+          LL_Log.println("Door found");
+          Badge.drawString("$!$c$8$+$+$+$+$+$+$+Door found");
+          Badge.tryCloseDoor();
+          delay(1000);
+        } 
+      }
       if(y > 3.0) {
         CurrentActionTimer = 0;
         CurrentAction = 3; // show name
+        if(Badge.tryFindDoor() == true) {
+          LL_Log.println("Door found");
+          Badge.drawString("$!$c$8$+$+$+$+$+$+$+Door found");
+          Badge.tryOpenDoor();
+          delay(1000);
+        } 
       }
       x = constrain(x, -2.0, 2.0);
       y = constrain(y, -2.0, 2.0);
@@ -196,14 +191,14 @@ void loop() {
 
   // Process commands from the command line
   processCommands();
-
+  
+  // Write to display
+  u8g2.sendBuffer();  
+  
   if(idleTime > 0) {
     esp_sleep_enable_timer_wakeup(idleTime * 1000);
     esp_light_sleep_start();
   }
-  
-  // Write to display
-  u8g2.sendBuffer();
 }
 
 
@@ -211,7 +206,7 @@ void loop() {
 void processCommands() {
   if(LL_Log.receiveLineAvailable()) {
     LL_Log.println(LL_Log.receiveLine);
-    if(LL_Log.receiveLine[0]=='d') {
+    if(LL_Log.receiveLine[0]=='B') {
       int data;
       if(sscanf(&LL_Log.receiveLine[1],"%d",&data)>=1) {
         LL_Log.printf("Brigthness Data: %d\r\n",  data);
@@ -228,21 +223,56 @@ void processCommands() {
     if(LL_Log.receiveLine[0]=='n') {
       char data[128];
       if(sscanf(&LL_Log.receiveLine[1],"%127[^\n]",&data)>=1) {
-        strcpy(badgeUserName, data);
-        LL_Log.printf("Bade name: %s\r\n",  badgeUserName);
-        Badge.writeFile("/name.txt", badgeUserName);
+        strcpy(Badge.userName, data);
+        LL_Log.printf("Bade name: %s\r\n",  Badge.userName);
+        Badge.writeFile("/name.txt", Badge.userName);
+        Badge.genDoorName();
+        Badge.saveKey();
       } else {
-        LL_Log.printf("Bade name: %s\r\n",  badgeUserName);
+        LL_Log.printf("Bade name: %s\r\n",  Badge.userName);
       }
 
       CurrentActionTimer = 0;
       CurrentAction = 3; // show name
+    } 
+    if(LL_Log.receiveLine[0]=='p') {
+      char data[128];
+      if(sscanf(&LL_Log.receiveLine[1],"%127[^\n]",&data)>=1) {
+        bool gkstat = Badge.genKey(data);
+        if(gkstat) {
+          LL_Log.printf("Key set to: %s\r\n",  data);
+          Badge.saveKey();
+        } else {
+          LL_Log.printf("GenKey failed: %s\r\n",  data);
+        }
+      } else {
+        char buf[70];
+        bytes2hex(Badge.door_pubkey, 32, buf);
+        LL_Log.printf("Public key: %s\r\n",  buf);
+      }
+
     } 
     if(LL_Log.receiveLine[0]=='i') {
       int data;
       if(sscanf(&LL_Log.receiveLine[1],"%d",&data)>=1) {
         LL_Log.printf("Idle time: %d\r\n",  data);
         idleTime = data;
+      }
+    }
+    if(LL_Log.receiveLine[0]=='d') {
+      char data[128];
+      if(sscanf(&LL_Log.receiveLine[1],"%127[^\n]",&data)>=1) {
+        String del_name = "/" + String(data);
+        LL_Log.printf("Delete file: %s\r\n",  del_name.c_str());
+        if(Badge.filesystem.exists(del_name.c_str())) {
+          if(Badge.filesystem.remove(del_name.c_str())) {
+            LL_Log.printf("File %s deleted\r\n", del_name.c_str());
+          } else {
+            LL_Log.printf("File %s delete failed\r\n", del_name.c_str());
+          }
+         } else {
+          LL_Log.printf("File %s not found\r\n", del_name.c_str());
+        }
       }
     }
   }

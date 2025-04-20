@@ -35,6 +35,7 @@ class FaceBehavior
 
 	void SetEmotion(eEmotions emotion, float value);
 	float GetEmotion(eEmotions emotion);
+  const char* GetEmotionName(eEmotions emotion);
 
 	void Clear();
 	void Update();

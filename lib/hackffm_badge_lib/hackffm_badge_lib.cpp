@@ -12,6 +12,10 @@
 #include <HTTPClient.h>
 #include <Update.h>
 
+#include <esp_now.h>
+#include <esp_log.h>
+#include <Ed25519.h>
+
 #include "LL_Lib.h"
 
 HackFFMBadgeLib HackFFMBadge;
@@ -39,7 +43,191 @@ uint8_t u8log_buffer[U8LOG_WIDTH*U8LOG_HEIGHT];
 #define FIRMWARE_URL "http://192.168.4.1/hackffmbadgev1_fw.bin"  // URL zur Firmware
 #define VERSION_URL  "http://192.168.4.1/hackffmbadgev1_vers.txt"  // URL zur Versionsdatei
 
+#define ESPNOW_CHANNEL 13
+
+
+/**
+ * Protocol Tx:
+ * Off Len
+ *   0   4  Preemble "D00r"
+ *   4  64  Signature
+ *  68  32  Public Key
+ * 100  32  Name (Cleartext UTF8, 0 filled)
+ * 132   8  Challenge respone
+ * 140   1  Command (might be longer than 1 if needed)   
+ * 
+ */
+bool HackFFMBadgeLib::txCommand(const char *cmd) {
+  uint8_t msg[4+64+32+32+8+8];
+  int cmdlen = strlen(cmd);
+  if(cmdlen > 8) cmdlen = 8;
+  msg[0] = 'D'; msg[1] = '0'; msg[2] = '0'; msg[3] = 'r';
+  memcpy(&msg[68], door_pubkey, 32);
+  memcpy(&msg[100], door_name, 32);
+  memcpy(&msg[132], lastChallenge, 8);
+  memcpy(&msg[140], cmd, cmdlen+1);
+  Ed25519::sign(&msg[4], door_prikey, door_pubkey, &msg[68], 32+32+8+cmdlen+1);
+  esp_now_peer_info_t peer = {
+    .peer_addr = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF},
+    .channel = ESPNOW_CHANNEL,
+    .encrypt = false
+  };
+  ESP_ERROR_CHECK(esp_now_send(peer.peer_addr, msg, 4+64+32+32+8+cmdlen+1));
+  return(true);
+}
+
+void HackFFMBadgeLib::saveKey() {
+  char priKey[70];
+  char pubKey[70];
+  char name[33];
+  memset(priKey, 0, sizeof(priKey));
+  memset(pubKey, 0, sizeof(pubKey));
+  memset(name, 0, sizeof(name));
+  bytes2hex(door_prikey, 32, priKey);
+  bytes2hex(door_pubkey, 32, pubKey);
+  strlcpy(name, (char *)door_name, sizeof(name)-1);
+  writeFile("/door_pri.txt", priKey);
+  writeFile("/door_pub.txt", pubKey);
+  writeFile("/door_nam.txt", name);
+}
+
+bool HackFFMBadgeLib::loadKey() {
+  // Load key from file
+  String loadPriKey = readFile("/door_pri.txt");
+  String loadPubKey = readFile("/door_pub.txt");
+  String loadName = readFile("/door_nam.txt");
+  if(loadPriKey.length() < 64) return false;
+  if(loadPubKey.length() < 64) return false;
+  if(loadName.length() == 0) genDoorName();
+  
+  return loadKey(loadPriKey.c_str(), loadPubKey.c_str(), loadName.c_str());
+}
+
+bool HackFFMBadgeLib::loadKey(const char *priKey, const char *pubKey, const char *name) {
+  size_t len = 0;
+  len = hex2bytes(priKey, door_prikey, 32);
+  if(len != 32) return false;
+  len = hex2bytes(pubKey, door_pubkey, 32);
+  if(len != 32) return false;  
+  memset(door_name, 0, 32);
+  strlcpy((char *)door_name, name, 31);
+  uint8_t temp_pubkey[32];
+  Ed25519::derivePublicKey(temp_pubkey, door_prikey);
+  if(memcmp(temp_pubkey, door_pubkey, 32) != 0) return false;
+  return true;
+}  
+
+bool HackFFMBadgeLib::genKey(const char *priKey) {
+  if(priKey == NULL) {
+    Ed25519::generatePrivateKey(door_prikey);
+  } else {
+    size_t len = 0;
+    len = hex2bytes(priKey, door_prikey, 32);
+    if(len != 32) return false;
+  }
+  Ed25519::derivePublicKey(door_pubkey, door_prikey);
+  return true;
+} 
+
+// If no name is given, generate a name from the user name
+void HackFFMBadgeLib::genDoorName(const char *name) {
+  char namebuf[34];
+  memset(namebuf, 0, sizeof(namebuf));
+  if(name != NULL) {
+    strlcpy(namebuf, name, sizeof(namebuf)-1);
+  } else {
+    snprintf(namebuf, sizeof(namebuf)-1, "HBdg %s", userName);
+  }
+  strlcpy((char *)door_name, namebuf, sizeof(door_name)-1);
+} 
+
+
+
+// Callback receive
+void on_data_recv(const uint8_t *mac_addr, const uint8_t *data, int len) {
+  if(len > 1) {
+    Badge.espNowRxMac[0] = mac_addr[0];
+    Badge.espNowRxMac[1] = mac_addr[1];
+    Badge.espNowRxMac[2] = mac_addr[2];
+    Badge.espNowRxMac[3] = mac_addr[3];
+    Badge.espNowRxMac[4] = mac_addr[4];
+    Badge.espNowRxMac[5] = mac_addr[5];
+    memcpy(Badge.espNowRxData, data, len);
+    Badge.espNowRxDataLen = len;
+  }
+}
+
+// Callback transmit
+void on_data_sent(const uint8_t *mac, esp_now_send_status_t status) {
+  Serial.printf("Sendestatus: %s", status == ESP_NOW_SEND_SUCCESS ? "Erfolg" : "Fehler");
+}
+
+bool HackFFMBadgeLib::tryFindDoor() {
+  // Open ESPNOW with timeout and send get challenge
+  if(findDoorState > 0) {
+    // LL_Log.println("Find door already in progress");
+    if(findDoorState ==  2) return true;
+    return false;
+  }
+  
+  // WiFi-Init
+  wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+  ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+  ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+  ESP_ERROR_CHECK(esp_wifi_start());
+  ESP_ERROR_CHECK(esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE));
+
+  // ESP-NOW-Init
+  ESP_ERROR_CHECK(esp_now_init());
+  esp_now_register_recv_cb(on_data_recv);
+  esp_now_register_send_cb(on_data_sent);
+
+  // Peer-Info konfigurieren (Broadcast)
+  esp_now_peer_info_t peer = {
+      .peer_addr = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF},
+      .channel = ESPNOW_CHANNEL,
+      .encrypt = false
+  };
+  ESP_ERROR_CHECK(esp_now_add_peer(&peer));
+
+  wifi_phy_rate_t wifi_rate = WIFI_PHY_RATE_48M; // WIFI_PHY_RATE_MCS5_SGI;
+ // wifi_rate = WIFI_PHY_RATE_LORA_250K;
+ // wifi_rate = WIFI_PHY_RATE_1M_L;
+  wifi_rate = WIFI_PHY_RATE_24M;
+ // wifi_rate = WIFI_PHY_RATE_MCS5_LGI;
+ 
+  esp_wifi_set_max_tx_power(28); // 7 dbm
+  
+  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G|WIFI_PROTOCOL_11N /* |WIFI_PROTOCOL_LR */);
+  esp_wifi_config_espnow_rate(WIFI_IF_STA,  wifi_rate);
+
+  txCommand("c");
+  findDoorState = 1;
+  findDoorTimeout = 0;
+
+  return false;
+
+}
+
+void HackFFMBadgeLib::tryOpenDoor() {
+  if(findDoorState == 2) {
+    txCommand("O"); findDoorState++;
+    findDoorTimeout = 0;
+  }
+}
+
+void HackFFMBadgeLib::tryCloseDoor() {
+  if(findDoorState == 2) {
+    txCommand("C"); findDoorState++;
+    findDoorTimeout = 0;
+  }
+}
+
 void HackFFMBadgeLib::begin() {
+  // Face must be created early, maybe some memory initialization issues there in... (weird eyes come out)
+  if(face_) delete face_;
+  face_ = new Face(/* screenWidth = */ 128, /* screenHeight = */ 64, /* eyeSize = */ 40);
+
   // a little less sound at boot
   pinMode(5, OUTPUT); digitalWrite(5, LOW); 
   pinMode(6, OUTPUT); digitalWrite(6, LOW);
@@ -56,6 +244,7 @@ void HackFFMBadgeLib::begin() {
   while (!Serial && serialUpTimeout < 1000) {
     delay(1);
   }
+  LL_Log.begin(115200, 2222); // Serial baud (not used), TCP Port
 
   // Perform hardware detection
   detectHardware();
@@ -66,11 +255,61 @@ void HackFFMBadgeLib::begin() {
     return;
   }
   listDir("/", 0);
+  
+  // try to load user name from file
+  String loadUserName = readFile("/name.txt");
+  if(loadUserName.length() > 0) strlcpy(userName, loadUserName.c_str(), sizeof(userName)-1);
+  
+  // try to load host name from file
+  uint8_t baseMac[6];
+  esp_efuse_mac_get_default(baseMac);
+  Serial.printf(" Base MAC: %02X:%02X:%02X:%02X:%02X:%02X\r\n", 
+    (unsigned int)baseMac[0], (unsigned int)baseMac[1], 
+    (unsigned int)baseMac[2], (unsigned int)baseMac[3], 
+    (unsigned int)baseMac[4], (unsigned int)baseMac[5]);
+  delay(10);
+  String loadHostName = readFile("/hostname.txt");
+  if(loadHostName.length() > 0) strlcpy(hostName, loadHostName.c_str(), sizeof(hostName)-1);
+  else {
+    // Generate a random name
+    sprintf(hostName, "hackffm-badge-%02X%02X%02X", (unsigned int)baseMac[3], (unsigned int)baseMac[4], (unsigned int)baseMac[5]);
+  }
+  Serial.printf(" HostName: %s\r\n", hostName);
 
-  // Start face
-  if(face_) delete face_;
-  face_ = new Face(/* screenWidth = */ 128, /* screenHeight = */ 64, /* eyeSize = */ 40);
+  // Try to load key from file
+  if(loadKey() == false) {
+    Serial.println(" loadKey failed - autogenerate new key");
+    genKey();
+    saveKey();
+  } 
+  
+  char buf[70];
+  bytes2hex(door_prikey, 32, buf);
+  Serial.printf(" Door Private key: %s\r\n", buf);
+  bytes2hex(door_pubkey, 32, buf);
+  Serial.printf(" Door Public key:  %s\r\n", buf);
+  Serial.printf(" Door Name: %s\r\n", door_name);
+
+  // Start face and set some default values
+  //if(face_) delete face_;
+  //face_ = new Face(/* screenWidth = */ 128, /* screenHeight = */ 64, /* eyeSize = */ 40);
   faceActive = true;
+  face().Behavior.GoToEmotion(eEmotions::Normal);
+  face().Behavior.SetEmotion(eEmotions::Normal, 0.8);
+  face().Behavior.SetEmotion(eEmotions::Glee, 0.05);
+  face().Behavior.SetEmotion(eEmotions::Worried, 0.05);
+  face().Behavior.SetEmotion(eEmotions::Surprised, 0.05);
+  face().Behavior.SetEmotion(eEmotions::Skeptic, 0.05);
+  // Automatically switch between behaviours (selecting new behaviour randomly based on the weight assigned to each emotion)
+  face().RandomBehavior = true;
+  face().Behavior.Timer.SetIntervalMillis(6000); // 6s
+
+  face().RandomBlink = true; // Automatically blink
+  face().Blink.Timer.SetIntervalMillis(4000);
+
+  // Automatically choose a new random direction to look
+  //face().RandomLook = true;  
+
 
   delay(3000);
   Serial.println("HackFFM Badge initialized");
@@ -104,6 +343,48 @@ void HackFFMBadgeLib::update() {
       ArduinoOTA.handle();
     }
   } 
+
+  if(findDoorState > 0) {
+    if(findDoorTimeout > 4000) {
+      findDoorState = 0;
+      esp_now_deinit();
+      WiFi.mode(WIFI_OFF);
+      Serial.println("Find door timeout");
+    } else {
+      if(findDoorState < 10) {
+        if(espNowRxDataLen > 0) {
+          Serial.printf("RxLen: %d\r\n", espNowRxDataLen);
+          // Check if it is valid Door protocol
+          if(espNowRxDataLen >= (4+32+8+1)) {
+            if(((espNowRxData[0] == 'D') && (espNowRxData[1] == '0') && (espNowRxData[2] == '0') && (espNowRxData[3] == 'a'))) {
+              if(memcmp(&espNowRxData[4], door_pubkey, 32) == 0) {
+                char cmd = espNowRxData[44];
+                memcpy(lastChallenge, &espNowRxData[36], 8);
+        
+                switch (findDoorState)
+                {
+                  case 1: // challenge requested, expect now 'c'
+                    if(cmd == 'c') findDoorState++; else findDoorState = 100;
+                    //txCommand("t");
+                    break;
+        
+                  case 3: // trigger requested, expect now 't'
+                    if(cmd == 't') findDoorState++; else findDoorState = 100;
+                    break;
+                  
+                  default:
+                    break;
+                }
+                Serial.printf("RxCmd: %.*s\n", espNowRxDataLen-44, &espNowRxData[44]);
+              }  
+            }
+          }
+          
+          espNowRxDataLen = 0;
+        }
+      }
+    }
+  }
     
 }
 
@@ -145,7 +426,7 @@ void HackFFMBadgeLib::listDir(const char *dirname, uint8_t levels) {
 
 // Function to write a string to a file
 bool HackFFMBadgeLib::writeFile(const char *path, const String &data) {
-  File file = filesystem.open(path, "w"); // "w" overwrite file
+  File file = filesystem.open(path, "w", true); // "w" overwrite file
   if (!file) {
     LL_Log.println("Can't open file to write");
       return false;
@@ -158,11 +439,15 @@ bool HackFFMBadgeLib::writeFile(const char *path, const String &data) {
 
 // Function to read a file and return the content as a string
 String HackFFMBadgeLib::readFile(const char *path) {
-  File file = filesystem.open(path, "r");  
   String data = "";
+  if(filesystem.exists(path) == false) {
+    // LL_Log.printf("File %s does not exist\r\n", path);
+    return data;
+  }
+  File file = filesystem.open(path, "r");  
   if (!file) {
     LL_Log.println("Can't open file for reading");
-      return data;
+    return data;
   }
   while (file.available()) {
       data += (char)file.read();
@@ -528,6 +813,8 @@ void HackFFMBadgeLib::detectHardware() {
   Serial.printf(" Flash for main program: %u Bytes\n", (uint32_t)ESP.getFreeSketchSpace());
   Serial.printf(" PSRAM size: %u Bytes\n", (uint32_t)ESP.getPsramSize());
   Serial.printf(" SDK version: %s\n", ESP.getSdkVersion());
+  Serial.printf(" ESP32 Arduino version: %d.%d.%d\n", ESP_ARDUINO_VERSION_MAJOR, ESP_ARDUINO_VERSION_MINOR, ESP_ARDUINO_VERSION_PATCH); 
+  
 
   // Init touch processors
   touch[0] = touchProcessor(pinTouchLU);
@@ -535,6 +822,10 @@ void HackFFMBadgeLib::detectHardware() {
   touch[2] = touchProcessor(pinTouchRU);
   touch[3] = touchProcessor(pinTouchRD);
 
+  setPowerAudio(false);
+}
+
+void HackFFMBadgeLib::playStartSound() {
   // play tone duh-duett
   setPowerAudio(true);
 
@@ -550,7 +841,7 @@ void HackFFMBadgeLib::detectHardware() {
   delay(500);
   writeTone(660);
 
-  /*
+  
   delay(100);
   writeTone(0);
   delay(150);
@@ -583,7 +874,7 @@ void HackFFMBadgeLib::detectHardware() {
   writeTone(380);
   delay(100);
   writeTone(0);
-   */
+   
   delay(575);
 
  
@@ -712,7 +1003,7 @@ uint32_t HackFFMBadgeLib::but0PressedFor() {
 
 bool HackFFMBadgeLib::connectWifi(const char* ssid, const char* password) {
   bool ret = false;
-  WiFi.setHostname(badgeHostname);
+  WiFi.setHostname(hostName);
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
   WiFi.setTxPower(WIFI_POWER_7dBm);
@@ -774,7 +1065,7 @@ void HackFFMBadgeLib::setupOTA() {
   });
   ArduinoOTA.begin();
   
-  MDNS.begin(badgeHostname);
+  MDNS.begin(hostName);
   MDNS.addService("debug", "tcp", 2222);
 }
 
@@ -813,6 +1104,43 @@ void HackFFMBadgeLib::tryToUpdate() {
   WiFi.disconnect();
   WiFi.mode(WIFI_OFF);
 }
+
+uint8_t hex1(const char c) {
+  uint8_t val = 255;
+  if((c >= 'A') && (c <= 'F')) val = c - 'A' + 10;
+  if((c >= 'a') && (c <= 'f')) val = c - 'a' + 10;
+  if((c >= '0') && (c <= '9')) val = c - '0';
+  return val;
+}
+
+size_t hex2bytes(const char *hexString, uint8_t *byteArray, size_t byteArrayLen) {
+  size_t byteCount = 0;
+
+  while(byteCount < byteArrayLen) {
+    uint8_t h = 0;
+    uint8_t l = 0;
+    char c;
+    while((h = hex1(c = *hexString++)) == 255) {
+      if(c == 0) break;
+    }
+    if(c == 0) break;
+    while((l = hex1(c = *hexString++)) == 255) {
+      if(c == 0) break;
+    }
+    if(c == 0) break;    
+    *byteArray++ = h*16+l;
+    byteCount++;
+  }
+
+  return byteCount;
+}
+
+void bytes2hex(const uint8_t *byteArray, size_t byteArrayLen, char *hexString) {
+  for(size_t i = 0; i < byteArrayLen; i++) {
+    sprintf(hexString + (i*2), "%02X", byteArray[i]);
+  }
+}
+
 
 float mapFloat(float x, float in_min, float in_max, float out_min, float out_max) {
   // Check if x is outside the input range

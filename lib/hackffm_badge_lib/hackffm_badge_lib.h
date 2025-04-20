@@ -20,6 +20,9 @@ extern U8G2LOG u8g2log;
 #define U8G2_DISP_HEIGHT 64
 
 float mapFloat(float x, float in_min, float in_max, float out_min, float out_max);
+size_t hex2bytes(const char *hexString, uint8_t *byteArray, size_t byteArrayLen);
+void   bytes2hex(const uint8_t *byteArray, size_t byteArrayLen, char *hexString);
+
 
 class touchProcessor {
   public:
@@ -124,15 +127,34 @@ class HackFFMBadgeLib {
     static const int NUM_TOUCH_PINS = 4;
     touchProcessor touch[NUM_TOUCH_PINS] = {-1, -1, -1, -1}; // LU, LD, RU, RD
 
+    bool loadKey(const char *priKey, const char *pubKey, const char *name);
+    bool genKey(const char *priKey = NULL); 
+    void genDoorName(const char *name = NULL);
+    bool loadKey(); // From files door_pri.txt, door_pub.txt, door_nam.txt
+    void saveKey(); // To files door_pri.txt, door_pub.txt, door_nam.txt
+    bool tryFindDoor(); // Also get challenge
+    void tryOpenDoor(); // Try open door
+    void tryCloseDoor(); // Try close door
+
     bool connectWifi(const char* ssid, const char* password);
     void setupOTA();
     void tryToUpdate();
 
     bool OTAinProgress = false;
 
-    char badgeHostname[32] = "hackffm-badge\0"; // add MAC address to make it unique
+    char hostName[32] = "hackffm-badge\0"; // add MAC address to make it unique
+    char userName[128] = "$cHackFFM$nBadge\0";
 
     fs::FS &filesystem = LittleFS; // default LittleFS
+
+    uint8_t espNowRxData[256]; // buffer for ESP-NOW data
+    uint8_t espNowRxDataLen = 0;
+    uint8_t espNowRxMac[6]; // MAC address of sender
+
+    uint8_t door_pubkey[32];
+    uint8_t door_name[32];
+
+    void playStartSound();
 
   private:
     void detectHardware();
@@ -155,6 +177,13 @@ class HackFFMBadgeLib {
     elapsedMillis but0CurrentPressedMs = 0;
     uint32_t but0WasPressedForMs = 0;
     bool but0LastPressed = false;
+
+    bool txCommand(const char *cmd);
+    uint8_t door_prikey[32];
+
+    uint8_t lastChallenge[8];
+    elapsedMillis findDoorTimeout = 0;
+    uint8_t findDoorState = 0;
     
 };
 

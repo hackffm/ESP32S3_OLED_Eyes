@@ -28,6 +28,30 @@ float FaceBehavior::GetEmotion(eEmotions emotion) {
 	return Emotions[emotion];
 }
 
+const char* FaceBehavior::GetEmotionName(eEmotions emotion) {
+  switch (emotion) {
+      case Normal: return "Normal";
+      case Angry: return "Angry";
+      case Glee: return "Glee";
+      case Happy: return "Happy";
+      case Sad: return "Sad";
+      case Worried: return "Worried";
+      case Focused: return "Focused";
+      case Annoyed: return "Annoyed";
+      case Surprised: return "Surprised";
+      case Skeptic: return "Skeptic";
+      case Frustrated: return "Frustrated";
+      case Unimpressed: return "Unimpressed";
+      case Sleepy: return "Sleepy";
+      case Suspicious: return "Suspicious";
+      case Squint: return "Squint";
+      case Furious: return "Furious";
+      case Scared: return "Scared";
+      case Awe: return "Awe";
+      default: return "Unknown";
+  }
+}
+
 void FaceBehavior::Clear() {
 	for (int emotion = 0; emotion < eEmotions::EMOTIONS_COUNT; emotion++) {
 		Emotions[emotion] = 0.0;
