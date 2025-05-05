@@ -4,7 +4,8 @@
 
 #include <Arduino.h>
 #include <elapsedMillis.h>
-#include <Freenove_WS2812_Lib_for_ESP32.h>
+//#include <Freenove_WS2812_Lib_for_ESP32.h> // unstable - kills random memory contents!
+#include <Adafruit_NeoPixel.h>
 #include "FS.h"
 #include <LittleFS.h> // For LittleFS
 //#include <SPIFFS.h>   // For SPIFFS
@@ -65,6 +66,8 @@ class touchProcessor {
 
 class HackFFMBadgeLib {
   public:
+    HackFFMBadgeLib() : boardLED(1, 21), antennaLED(10, -1) {}
+
     void begin();
     void update();  // Updates touch
     void powerOff();
@@ -119,22 +122,27 @@ class HackFFMBadgeLib {
 
     void drawBMP(const char *filename, bool noDraw = false);
 
+    // Functions for Hackerspace door 
+    bool tryFindDoor(); // Also get challenge
+    void tryOpenDoor(); // Try open door
+    void tryCloseDoor(); // Try close door    
+
   // quasi-private, usually no need to use directly 
-    Freenove_ESP32_WS2812* freenoveAntennaLED = nullptr;  
+    Adafruit_NeoPixel antennaLED;
     int pinOledSda, pinOledSck, pinPwrHold, pinAudio, pinAudioEn,
       pinTouchLU, pinTouchLD, pinTouchRU, pinTouchRD, pinNeoPixel,
       pinExtA, pinExtB, pinBoardRGB, pinBoardTx, pinBoardRx; 
     static const int NUM_TOUCH_PINS = 4;
     touchProcessor touch[NUM_TOUCH_PINS] = {-1, -1, -1, -1}; // LU, LD, RU, RD
 
+    // Functions for Hackerspace door 
     bool loadKey(const char *priKey, const char *pubKey, const char *name);
     bool genKey(const char *priKey = NULL); 
     void genDoorName(const char *name = NULL);
     bool loadKey(); // From files door_pri.txt, door_pub.txt, door_nam.txt
     void saveKey(); // To files door_pri.txt, door_pub.txt, door_nam.txt
-    bool tryFindDoor(); // Also get challenge
-    void tryOpenDoor(); // Try open door
-    void tryCloseDoor(); // Try close door
+    uint8_t door_pubkey[32];
+    uint8_t door_name[32];
 
     bool connectWifi(const char* ssid, const char* password);
     void setupOTA();
@@ -151,9 +159,6 @@ class HackFFMBadgeLib {
     uint8_t espNowRxDataLen = 0;
     uint8_t espNowRxMac[6]; // MAC address of sender
 
-    uint8_t door_pubkey[32];
-    uint8_t door_name[32];
-
     void playStartSound();
 
   private:
@@ -165,7 +170,8 @@ class HackFFMBadgeLib {
   
     int boardType = 0; // 0: unknown, 1: blue, 2: black (detection unreliable!)
     static const char* const boardTypeTexts[]; 
-    Freenove_ESP32_WS2812* freenoveBoardLED = nullptr; 
+
+    Adafruit_NeoPixel boardLED;
     uint8_t OledAddress = 0;
 
     elapsedMillis lastTouchRead = 0;

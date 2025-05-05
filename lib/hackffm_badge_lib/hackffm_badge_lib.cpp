@@ -6,6 +6,10 @@
 #include <WiFiMulti.h>
 #include <elapsedMillis.h>
 #include <Wire.h>
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+#include "esp_system.h"
+#include "esp_mac.h"
+#endif
 
 #include <ArduinoOTA.h>
 #include <ESPmDNS.h>
@@ -16,10 +20,17 @@
 #include <esp_log.h>
 #include <Ed25519.h>
 
+// Peter Schatzmann Libs for Audio and Tasks
+#include "freertos-all.h"
+
+#include "hal/usb_serial_jtag_ll.h"
+//#include "hal/usb_phy_ll.h"
+
 #include "LL_Lib.h"
 
 HackFFMBadgeLib HackFFMBadge;
 HackFFMBadgeLib& Badge = HackFFMBadge;
+Face face_inst(/* screenWidth = */ 128, /* screenHeight = */ 64, /* eyeSize = */ 40);
 
 // Displays are selected in platformio.ini
 //#define U8G2_DISPLAYTYPE U8G2_SSD1306_128X64_ADAFRUIT_F_HW_I2C  /* 0.96 inch */
@@ -44,7 +55,6 @@ uint8_t u8log_buffer[U8LOG_WIDTH*U8LOG_HEIGHT];
 #define VERSION_URL  "http://192.168.4.1/hackffmbadgev1_vers.txt"  // URL zur Versionsdatei
 
 #define ESPNOW_CHANNEL 13
-
 
 /**
  * Protocol Tx:
@@ -144,7 +154,12 @@ void HackFFMBadgeLib::genDoorName(const char *name) {
 
 
 // Callback receive
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+void on_data_recv(const esp_now_recv_info_t *esp_now_info, const uint8_t *data, int len) {
+  const uint8_t *mac_addr  = esp_now_info->src_addr;
+  #else
 void on_data_recv(const uint8_t *mac_addr, const uint8_t *data, int len) {
+#endif  
   if(len > 1) {
     Badge.espNowRxMac[0] = mac_addr[0];
     Badge.espNowRxMac[1] = mac_addr[1];
@@ -199,7 +214,17 @@ bool HackFFMBadgeLib::tryFindDoor() {
   esp_wifi_set_max_tx_power(28); // 7 dbm
   
   esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G|WIFI_PROTOCOL_11N /* |WIFI_PROTOCOL_LR */);
+  #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+  esp_now_rate_config_t en_rateconfig = {
+    .phymode = WIFI_PHY_MODE_HT20, // WIFI_PHY_MODE_11G,
+    .rate = WIFI_PHY_RATE_MCS4_SGI,
+    .ersu = false,   
+    .dcm = false,
+  };
+  esp_now_set_peer_rate_config(peer.peer_addr, &en_rateconfig);
+  #else
   esp_wifi_config_espnow_rate(WIFI_IF_STA,  wifi_rate);
+  #endif
 
   txCommand("c");
   findDoorState = 1;
@@ -225,8 +250,9 @@ void HackFFMBadgeLib::tryCloseDoor() {
 
 void HackFFMBadgeLib::begin() {
   // Face must be created early, maybe some memory initialization issues there in... (weird eyes come out)
-  if(face_) delete face_;
-  face_ = new Face(/* screenWidth = */ 128, /* screenHeight = */ 64, /* eyeSize = */ 40);
+  //if(face_) delete face_;
+  //face_ = new Face(/* screenWidth = */ 128, /* screenHeight = */ 64, /* eyeSize = */ 40);
+  face_ = &face_inst;
 
   // a little less sound at boot
   pinMode(5, OUTPUT); digitalWrite(5, LOW); 
@@ -262,7 +288,11 @@ void HackFFMBadgeLib::begin() {
   
   // try to load host name from file
   uint8_t baseMac[6];
+  #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+  esp_read_mac(baseMac, ESP_MAC_EFUSE_FACTORY);
+  #else
   esp_efuse_mac_get_default(baseMac);
+  #endif
   Serial.printf(" Base MAC: %02X:%02X:%02X:%02X:%02X:%02X\r\n", 
     (unsigned int)baseMac[0], (unsigned int)baseMac[1], 
     (unsigned int)baseMac[2], (unsigned int)baseMac[3], 
@@ -284,8 +314,8 @@ void HackFFMBadgeLib::begin() {
   } 
   
   char buf[70];
-  bytes2hex(door_prikey, 32, buf);
-  Serial.printf(" Door Private key: %s\r\n", buf);
+  //bytes2hex(door_prikey, 32, buf);
+  //Serial.printf(" Door Private key: %s\r\n", buf);
   bytes2hex(door_pubkey, 32, buf);
   Serial.printf(" Door Public key:  %s\r\n", buf);
   Serial.printf(" Door Name: %s\r\n", door_name);
@@ -294,6 +324,7 @@ void HackFFMBadgeLib::begin() {
   //if(face_) delete face_;
   //face_ = new Face(/* screenWidth = */ 128, /* screenHeight = */ 64, /* eyeSize = */ 40);
   faceActive = true;
+  face().Expression.GoTo_Normal();
   face().Behavior.GoToEmotion(eEmotions::Normal);
   face().Behavior.SetEmotion(eEmotions::Normal, 0.8);
   face().Behavior.SetEmotion(eEmotions::Glee, 0.05);
@@ -683,8 +714,6 @@ void HackFFMBadgeLib::initOLED() {
 
 void HackFFMBadgeLib::detectHardware() {
   pinVariantIndex = 0; OledAddress = 0;
-  if(freenoveBoardLED) { delete freenoveBoardLED; freenoveBoardLED = nullptr; }
-  if(freenoveAntennaLED) { delete freenoveAntennaLED; freenoveAntennaLED = nullptr; }
 
   // Try to detect blue or black board by checking GPIO3
   pinMode(3, OUTPUT);
@@ -696,17 +725,16 @@ void HackFFMBadgeLib::detectHardware() {
   Serial.printf("GPIO3 ADC: %d\n", pina3);
   if((pina3 > 2700) && (pina3 < 3200)) {
     boardType = 2; // black
-    freenoveBoardLED = new Freenove_ESP32_WS2812(1, 48, 0);
-    freenoveBoardLED->begin();
+    boardLED.setPin(48);
   } else if(pina3 > 3200) {
     boardType = 1; // blue
-    freenoveBoardLED = new Freenove_ESP32_WS2812(1, 21, 0);
-    freenoveBoardLED->begin();
+    boardLED.setPin(21);
   } else {
     boardType = 0; // unknown
   }
   Serial.printf("BoardType: %s\n", boardTypeTexts[boardType]);
 
+  boardLED.begin();
   setBoardLED(0, 1, 0); // green dark
 
   // Try find OLED display which defines board variant
@@ -758,16 +786,15 @@ void HackFFMBadgeLib::detectHardware() {
   setPowerHold(true);
 
   // Re-Init NeoPixel
-  if(freenoveBoardLED) { delete freenoveBoardLED; freenoveBoardLED = nullptr; }
-  if(freenoveAntennaLED) { delete freenoveAntennaLED; freenoveAntennaLED = nullptr; }
   if(pinBoardRGB >= 0) {
-    freenoveBoardLED = new Freenove_ESP32_WS2812(1, pinBoardRGB, 0);
-    freenoveBoardLED->begin();
+    boardLED.setPin(pinBoardRGB);
+    boardLED.begin();
   }
   if(pinNeoPixel >= 0) {
-    freenoveAntennaLED = new Freenove_ESP32_WS2812(10, pinNeoPixel, 1, TYPE_GRB);
-    freenoveAntennaLED->begin();
+    antennaLED.setPin(pinNeoPixel);
+    antennaLED.begin();
   }
+
 
   // Init OLED display if found or blink red-blue 5 times
   if(ret >= 1) {
@@ -780,7 +807,8 @@ void HackFFMBadgeLib::detectHardware() {
       default: Serial.println("Unknown variant"); break;
     }
     setBoardLED(0, 1, 0); // green dark
-    setAntennaLED(12, 4, 0); // orange
+    antennaLED.fill(12, 4, 0); // orange
+    setAntennaLED(12, 4, 0); 
   } else {
     Serial.println("No OLED display found - detection of variant not possible, other hardware not available!");
 
@@ -917,9 +945,11 @@ void HackFFMBadgeLib::setBoardLED(uint32_t rgb) {
 }
 
 void HackFFMBadgeLib::setBoardLED(uint8_t r, uint8_t g, uint8_t b) {
-  if(freenoveBoardLED) {
-    freenoveBoardLED->setLedColor(0, r, g, b);
-  } 
+  //if(freenoveBoardLED) {
+  //  freenoveBoardLED->setLedColor(0, r, g, b);
+ // } 
+  boardLED.setPixelColor(0, r, g, b);
+  boardLED.show();  
 }
 
 void HackFFMBadgeLib::setAntennaLED(uint32_t rgb) {
@@ -927,9 +957,11 @@ void HackFFMBadgeLib::setAntennaLED(uint32_t rgb) {
 }
 
 void HackFFMBadgeLib::setAntennaLED(uint8_t r, uint8_t g, uint8_t b) {
-  if(freenoveAntennaLED) {
-    freenoveAntennaLED->setLedColor(0, r, g, b);
-  } 
+  //if(freenoveAntennaLED) {
+  //  freenoveAntennaLED->setLedColor(0, r, g, b);
+  //} 
+  antennaLED.setPixelColor(0, r, g, b);
+  antennaLED.show();
 }
 
 void HackFFMBadgeLib::powerOff() {  
@@ -1087,10 +1119,12 @@ void HackFFMBadgeLib::tryToUpdate() {
     if (httpCode == HTTP_CODE_OK) {
         int contentLength = http.getSize();
         if (contentLength > 0) {
+            drawString("$!$c$8$+$+$+$+$+$+$+Updating FW...");
             WiFiClient * stream = http.getStreamPtr();
             if (Update.begin(contentLength)) {
                 size_t written = Update.writeStream(*stream);
                 if (written == contentLength && Update.end()) {
+                    drawString("$nDone."); delay(3000);
                     ESP.restart();
                 }
             }
@@ -1152,4 +1186,19 @@ float mapFloat(float x, float in_min, float in_max, float out_min, float out_max
 
   // Map the proportion to the output range and return the result
   return (proportion * (out_max - out_min)) + out_min;
+}
+
+bool is_host_usb_device_connected(void)
+{
+	return *((volatile uint32_t *)USB_SERIAL_JTAG_OUT_EP0_ST_REG) != 0;
+}
+
+void disconnect_cdc_port(void)
+{
+	*((volatile uint32_t *)USB_SERIAL_JTAG_CONF0_REG) &= ~(1<<9);
+}
+
+void connect_cdc_port(void)
+{
+	*((volatile uint32_t *)USB_SERIAL_JTAG_CONF0_REG) |= (1<<9);
 }

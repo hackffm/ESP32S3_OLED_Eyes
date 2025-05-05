@@ -13,7 +13,115 @@
 #endif
 
 #include <hackffm_badge_lib.h>
- 
+
+#include "freertos-all.h"
+
+#include "AudioTools.h"
+#include "AudioTools/Disk/AudioSourceLittleFS.h"
+#include "AudioTools/AudioCodecs/CodecMP3Helix.h"
+
+
+I2SStream i2s;
+PWMAudioOutput pwm; 
+MP3DecoderHelix decoder;
+const char *startFilePath="/";
+const char* ext="mp3";
+audio_tools::AudioSourceLittleFS source(startFilePath, ext);
+AudioPlayer player(source, i2s /* pwm */, decoder);
+
+SineWaveGenerator<int16_t> sineWave(32000);                // subclass of SoundGenerator with max amplitude of 32000
+GeneratedSoundStream<int16_t> sound(sineWave);             // Stream generated from sine wave
+I2SStream out; 
+StreamCopy copier(out, sound);                             // copies sound into i2s
+
+void printMetaData(MetaDataType type, const char* str, int len){
+  Serial.print("==> ");
+  Serial.print(toStr(type));
+  Serial.print(": ");
+  Serial.println(str);
+}
+
+void setup2() {
+  AudioInfo info(44100, 2, 16);
+  Badge.setPowerAudio(true);
+  while(Serial.available()) Serial.read();
+
+  LL_Log.println("Audio start");
+  AudioToolsLogger.begin(Serial, AudioToolsLogLevel::Info);
+
+  // setup output
+  auto cfg = i2s.defaultConfig(TX_MODE);
+  cfg.copyFrom(info);
+  cfg.signal_type = PDM; 
+  cfg.pin_data = HackFFMBadge.pinAudio;
+  cfg.pin_bck = 17; // need a clock pin for PDM even if not used
+  i2s.begin(cfg);
+
+  auto config = pwm.defaultConfig();
+  config.copyFrom(info);
+  config.start_pin = HackFFMBadge.pinAudio;
+//  pwm.begin(config);
+  
+
+  // setup player
+  //source.setFileFilter("*Bob Dylan*");
+  player.setMetadataCallback(printMetaData);
+  player.setVolume(1.0);
+  player.begin();
+  
+  while(!Serial.available() && player.isActive()) {
+    player.copy();
+  }
+  LL_Log.println("Audio done");
+  Badge.setPowerAudio(false);
+
+}
+
+void setup2a(void) {  
+  AudioInfo info(44100, 2, 16);
+  // Open Serial 
+  Badge.setPowerAudio(true);
+  while(Serial.available()) Serial.read();
+  AudioToolsLogger.begin(Serial, AudioToolsLogLevel::Info);
+
+  // start I2S
+  Serial.println("starting I2S...");
+  auto config = out.defaultConfig(TX_MODE);
+  config.signal_type = PDM; 
+  config.pin_data = 6; // Here comes the audio (but Left+Right!)
+  config.pin_bck = 17; // need a clock pin for PDM even if not used
+  config.copyFrom(info); 
+  out.begin(config);
+
+  // Setup sine wave
+  sineWave.begin(info, N_B4);
+  Serial.println("started...");
+
+  while(!Serial.available()) copier.copy();
+  LL_Log.println("Audio done");
+  Badge.setPowerAudio(false);
+}
+
+
+
+// This sets Arduino Stack Size - comment this line to use default 8K stack size
+SET_LOOP_TASK_STACK_SIZE(16*1024); // 16KB
+
+cpp_freertos::Task task1("AntennaLED", 2000, 1, [](){
+  // Animate antenna LED
+  static uint8_t j = 0;
+  static int once = 100;
+  j++;
+  Badge.setAntennaLED(j%32, j%16, j%20);
+  delay(50);
+  if(once) {
+    once--;
+    if(once == 0) {
+      Serial.printf(" Task1() - Free Stack Space: %d\n", uxTaskGetStackHighWaterMark(NULL));
+    }
+  }
+});
+
 void setup() {
   HackFFMBadge.begin();
 
@@ -39,7 +147,13 @@ void setup() {
     }
   }
 
+  
+  task1.Start(1);
+
+  setup2();
 }
+
+
 
 int CurrentAction = 0;
 int CurrentActionDuration = 1000;
@@ -135,11 +249,6 @@ void loop() {
       Badge.face().Behavior.GoToEmotion((eEmotions)emo);
       LL_Log.printf("Set emotion: %s\r\n", Badge.face().Behavior.GetEmotionName((eEmotions)emo));
     }
-
-        // Animate antenna LED
-        static uint8_t j = 0;
-        j++;
-        Badge.setAntennaLED(j%32, j%16, j%20);
   }
 
   /*  if(HackFFMBadge.isNewTouchDataAvailable()) */ 
@@ -257,6 +366,8 @@ void processCommands() {
       if(sscanf(&LL_Log.receiveLine[1],"%d",&data)>=1) {
         LL_Log.printf("Idle time: %d\r\n",  data);
         idleTime = data;
+      } else {
+        LL_Log.printf(" Loop() - Free Stack Space: %d\n", uxTaskGetStackHighWaterMark(NULL));
       }
     }
     if(LL_Log.receiveLine[0]=='d') {
@@ -274,6 +385,9 @@ void processCommands() {
           LL_Log.printf("File %s not found\r\n", del_name.c_str());
         }
       }
+    }
+    if(LL_Log.receiveLine[0]=='a') {
+      setup2();
     }
   }
 }
