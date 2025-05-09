@@ -138,7 +138,7 @@ class HackFFMBadgeLib {
     // Functions for Hackerspace door 
     bool loadKey(const char *priKey, const char *pubKey, const char *name);
     bool genKey(const char *priKey = NULL); 
-    void genDoorName(const char *name = NULL);
+    void genDoorName(const char *name = NULL);  // User name for door
     bool loadKey(); // From files door_pri.txt, door_pub.txt, door_nam.txt
     void saveKey(); // To files door_pri.txt, door_pub.txt, door_nam.txt
     uint8_t door_pubkey[32];
@@ -158,6 +158,8 @@ class HackFFMBadgeLib {
     uint8_t espNowRxData[256]; // buffer for ESP-NOW data
     uint8_t espNowRxDataLen = 0;
     uint8_t espNowRxMac[6]; // MAC address of sender
+    int8_t  espNowRxRssi = 0; // Last Rx RSSI 
+    char    lastFoundDoorName[34]; // Last found door name
 
     void playStartSound();
 

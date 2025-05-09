@@ -167,8 +167,12 @@ void on_data_recv(const uint8_t *mac_addr, const uint8_t *data, int len) {
     Badge.espNowRxMac[3] = mac_addr[3];
     Badge.espNowRxMac[4] = mac_addr[4];
     Badge.espNowRxMac[5] = mac_addr[5];
+    if(len > 252) len = 252;
     memcpy(Badge.espNowRxData, data, len);
     Badge.espNowRxDataLen = len;
+    #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+    Badge.espNowRxRssi = esp_now_info->rx_ctrl->rssi;
+    #endif
   }
 }
 
@@ -211,13 +215,13 @@ bool HackFFMBadgeLib::tryFindDoor() {
   wifi_rate = WIFI_PHY_RATE_24M;
  // wifi_rate = WIFI_PHY_RATE_MCS5_LGI;
  
-  esp_wifi_set_max_tx_power(28); // 7 dbm
+  esp_wifi_set_max_tx_power(44); // 11 dbm
   
   esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G|WIFI_PROTOCOL_11N /* |WIFI_PROTOCOL_LR */);
   #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
   esp_now_rate_config_t en_rateconfig = {
     .phymode = WIFI_PHY_MODE_HT20, // WIFI_PHY_MODE_11G,
-    .rate = WIFI_PHY_RATE_MCS4_SGI,
+    .rate = WIFI_PHY_RATE_MCS0_LGI, // WIFI_PHY_RATE_MCS4_SGI,
     .ersu = false,   
     .dcm = false,
   };
@@ -395,7 +399,13 @@ void HackFFMBadgeLib::update() {
                 switch (findDoorState)
                 {
                   case 1: // challenge requested, expect now 'c'
-                    if(cmd == 'c') findDoorState++; else findDoorState = 100;
+                    if(cmd == 'c') { 
+                      findDoorState++; 
+                      int lenDoorName = espNowRxDataLen - 45;
+                      if(lenDoorName > 32) lenDoorName = 32;
+                      if(lenDoorName > 0) memcpy(door_name, &espNowRxData[45], lenDoorName);
+                      door_name[lenDoorName] = 0;
+                    } else findDoorState = 100;
                     //txCommand("t");
                     break;
         
@@ -1124,7 +1134,7 @@ void HackFFMBadgeLib::tryToUpdate() {
             if (Update.begin(contentLength)) {
                 size_t written = Update.writeStream(*stream);
                 if (written == contentLength && Update.end()) {
-                    drawString("$nDone."); delay(3000);
+                    drawString("$c$n$nDone."); delay(3000);
                     ESP.restart();
                 }
             }

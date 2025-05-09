@@ -8,7 +8,7 @@
 // see attic/MyCreds.h for an example
 #if defined __has_include
 #  if __has_include (<MyCreds.h>)
-#    include <MyCreds.h>  // Define WIFI_SSID and WIFI_PASSWORD here - see file in Attic for example
+#    include <MyCredsHackffm.h>  // Define WIFI_SSID and WIFI_PASSWORD here - see file in Attic for example
 #  endif
 #endif
 
@@ -129,7 +129,7 @@ void setup() {
 
   Badge.drawBMP("/badge.bmp");
   elapsedMillis logoTimer = 0;
-  while(logoTimer < 6000) {
+  while(logoTimer < 4000) {
     delay(10);
     if(HackFFMBadge.but0PressedSince() > 1000) {
       #ifdef WIFI_SSID
@@ -259,20 +259,22 @@ void loop() {
         CurrentActionTimer = 0;
         CurrentAction = 3; // show name
         if(Badge.tryFindDoor() == true) {
+          char buf[128]; sprintf(buf, "$!$c$8$+$+Door found %d:\n%s\nTry closing...", Badge.espNowRxRssi, Badge.door_name);
           LL_Log.println("Door found");
-          Badge.drawString("$!$c$8$+$+$+$+$+$+$+Door found");
+          Badge.drawString(buf);
           Badge.tryCloseDoor();
-          delay(1000);
+          delay(3000);
         } 
       }
       if(y > 3.0) {
         CurrentActionTimer = 0;
         CurrentAction = 3; // show name
         if(Badge.tryFindDoor() == true) {
+          char buf[128]; sprintf(buf, "$!$c$8$+$+Door found %d:\n%s\nTry opening...", Badge.espNowRxRssi, Badge.door_name);
           LL_Log.println("Door found");
-          Badge.drawString("$!$c$8$+$+$+$+$+$+$+Door found");
+          Badge.drawString(buf);
           Badge.tryOpenDoor();
-          delay(1000);
+          delay(3000);
         } 
       }
       x = constrain(x, -2.0, 2.0);
