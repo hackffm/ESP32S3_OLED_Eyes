@@ -13,94 +13,24 @@
 #endif
 
 #include <hackffm_badge_lib.h>
+#include "menu.h"
 
 #include "freertos-all.h"
 
-#include "AudioTools.h"
-#include "AudioTools/Disk/AudioSourceLittleFS.h"
-#include "AudioTools/AudioCodecs/CodecMP3Helix.h"
+#include "esp_system.h"
+#include "esp_pm.h"
 
-
-I2SStream i2s;
-PWMAudioOutput pwm; 
-MP3DecoderHelix decoder;
-const char *startFilePath="/";
-const char* ext="mp3";
-audio_tools::AudioSourceLittleFS source(startFilePath, ext);
-AudioPlayer player(source, i2s /* pwm */, decoder);
-
-SineWaveGenerator<int16_t> sineWave(32000);                // subclass of SoundGenerator with max amplitude of 32000
-GeneratedSoundStream<int16_t> sound(sineWave);             // Stream generated from sine wave
-I2SStream out; 
-StreamCopy copier(out, sound);                             // copies sound into i2s
-
-void printMetaData(MetaDataType type, const char* str, int len){
-  Serial.print("==> ");
-  Serial.print(toStr(type));
-  Serial.print(": ");
-  Serial.println(str);
-}
-
-void setup2() {
-  AudioInfo info(44100, 2, 16);
-  Badge.setPowerAudio(true);
-  while(Serial.available()) Serial.read();
-
-  LL_Log.println("Audio start");
-  AudioToolsLogger.begin(Serial, AudioToolsLogLevel::Info);
-
-  // setup output
-  auto cfg = i2s.defaultConfig(TX_MODE);
-  cfg.copyFrom(info);
-  cfg.signal_type = PDM; 
-  cfg.pin_data = HackFFMBadge.pinAudio;
-  cfg.pin_bck = 17; // need a clock pin for PDM even if not used
-  i2s.begin(cfg);
-
-  auto config = pwm.defaultConfig();
-  config.copyFrom(info);
-  config.start_pin = HackFFMBadge.pinAudio;
-//  pwm.begin(config);
-  
-
-  // setup player
-  //source.setFileFilter("*Bob Dylan*");
-  player.setMetadataCallback(printMetaData);
-  player.setVolume(1.0);
-  player.begin();
-  
-  while(!Serial.available() && player.isActive()) {
-    player.copy();
-  }
-  LL_Log.println("Audio done");
-  Badge.setPowerAudio(false);
-
-}
-
-void setup2a(void) {  
-  AudioInfo info(44100, 2, 16);
-  // Open Serial 
-  Badge.setPowerAudio(true);
-  while(Serial.available()) Serial.read();
-  AudioToolsLogger.begin(Serial, AudioToolsLogLevel::Info);
-
-  // start I2S
-  Serial.println("starting I2S...");
-  auto config = out.defaultConfig(TX_MODE);
-  config.signal_type = PDM; 
-  config.pin_data = 6; // Here comes the audio (but Left+Right!)
-  config.pin_bck = 17; // need a clock pin for PDM even if not used
-  config.copyFrom(info); 
-  out.begin(config);
-
-  // Setup sine wave
-  sineWave.begin(info, N_B4);
-  Serial.println("started...");
-
-  while(!Serial.available()) copier.copy();
-  LL_Log.println("Audio done");
-  Badge.setPowerAudio(false);
-}
+const int EYESTYLES_MAX = 2; // 0 = normal, 1 = also normal, 2 = raster lines
+int currentEmotion = -1; // -1 = random behaviour, 0..EMOTIONS_COUNT = specific emotion
+int currentEyeStyle = -1; // -2 = raster but changes, -1 = normal but changes, 0 = normal, 1 = also normal, 2 = raster lines
+int durationShowEyes = 30000; // 30 seconds
+int durationShowName = 3000;
+int durationShowLogo = 3000;
+int currentShow = 0; // 0 = eyes, 1 = name, 2 = logo
+int currentShowDuration = 0;
+elapsedMillis durationShowTimer = 0;
+bool debugTouch = false;
+uint32_t idleTime = 0;
 
 
 
@@ -125,13 +55,13 @@ cpp_freertos::Task task1("AntennaLED", 2000, 1, [](){
 void setup() {
   HackFFMBadge.begin();
 
-  if(Badge.filesystem.exists("/startsnd.txt")) Badge.playStartSound();
+//  if(Badge.filesystem.exists("/startsnd.txt")) Badge.playStartSound();
 
   Badge.drawBMP("/badge.bmp");
   elapsedMillis logoTimer = 0;
   while(logoTimer < 4000) {
     delay(10);
-    if(HackFFMBadge.but0PressedSince() > 1000) {
+    if((HackFFMBadge.but0PressedSince() > 1000) /*|| (is_host_usb_device_connected() == true) */ ) {
       #ifdef WIFI_SSID
       LL_Log.println("Long Press");
       Badge.drawString("$!$c$8$+$+$+$+$+$+$+Connecting$nto WiFi..");
@@ -150,162 +80,121 @@ void setup() {
   
   task1.Start(1);
 
-  setup2();
+  // setup2();
+  Badge.playMP3("/boot.mp3");
+
+  // Cast screen to this channel if file exists and contains the channel number
+  Badge.txDisplaydata(Badge.readFile("/scrncast.chn").toInt());
 }
 
 
 
-int CurrentAction = 0;
-int CurrentActionDuration = 1000;
-elapsedMillis CurrentActionTimer = 0;
-uint32_t idleTime = 0;
-bool debugTouch = false;
+
+// Shows eyes, logo, name and cycles through those
+void doShow() {
+  // Cycle when currentShowDuration is over
+  if(durationShowTimer > currentShowDuration) {
+    durationShowTimer = 0;
+    currentShow++;
+    if(currentShow >= 3) currentShow = 0;
+    // set new currentShowDuration
+    switch(currentShow) {
+      case 0: 
+        currentShowDuration = durationShowEyes; 
+        if(currentEyeStyle < 0) {
+          currentEyeStyle--;
+          if(currentEyeStyle < -(EYESTYLES_MAX)) currentEyeStyle = -1; // reset to normal
+        }
+        break;
+      case 1: currentShowDuration = durationShowName; break;
+      case 2: currentShowDuration = durationShowLogo; break;
+    }
+  }
+
+  // Renders actual show
+  if(currentShowDuration > 0) {
+    switch(currentShow) {
+      case 0: // eyes, modify style if necessary
+        Badge.face().UpdateBuffer(); // ~450us
+        if(abs(currentEyeStyle) == 2) {
+          // raster lines
+          u8g2.setDrawColor(0);
+          for(int y = 0; y < 64; y+=2) {
+            u8g2.drawHLine(0,y,128);
+          }
+          u8g2.setDrawColor(1);
+        }
+        break;
+      case 1: 
+        u8g2.setDrawColor(1);
+        //Badge.face().UpdateBuffer();
+        {
+        String showuser = "$c$3$+$+$+$+";
+        showuser.concat(Badge.userName);
+        showuser.replace(" ", "$n");
+        Badge.drawString(showuser.c_str(),0,0,2,true);
+        }
+        break;
+      case 2: // logo
+        Badge.drawBMP("/badge.bmp", true);
+        break;        
+    }
+  }
+
+}
+
 
 void loop() {
-  static elapsedMillis actionTimer = 0;
 
   Badge.update();  // <50us
 
   // Clear display buffer, paint first layer but dont send it to display
   u8g2.clearBuffer(); // <10us
   
-  if(CurrentActionTimer > CurrentActionDuration) {
-    CurrentActionTimer = 0;
-    CurrentAction++;
-    if(CurrentAction > 3) CurrentAction = 0;
-  }
-  switch(CurrentAction) {
-    case 0: 
-      CurrentActionDuration = 30000;
-      Badge.face().UpdateBuffer(); // ~450us
-      break;
-    case 1: 
-      CurrentActionDuration = 1000;
-      Badge.drawBMP("/badge.bmp", true);
-      break;
-    case 2: 
-      CurrentActionDuration = 30000;
-      // Paint Face like TV raster lines
-      
-      Badge.face().UpdateBuffer(); // ~450us
-      u8g2.setDrawColor(0);
-      for(int y = 0; y < 64; y+=2) {
-        u8g2.drawHLine(0,y,128);
-      }
-      u8g2.setDrawColor(1);
-
-      break;
-    case 3: 
-      CurrentActionDuration = 3000;
-       
-      u8g2.setDrawColor(1);
-      //Badge.face().UpdateBuffer();
-      String showuser = "$c$3$+$+$+$+";
-      showuser.concat(Badge.userName);
-      showuser.replace(" ", "$n");
-      Badge.drawString(showuser.c_str(),0,0,2,true);
-
-      break;
-  }
+  doShow(); // Paint eyes, name or logo
   
   LL_Log.update(); 
 
-  
-  if(actionTimer > 100) {
-    static int emo = 0;
-    actionTimer = 0;
+  doMenu();
 
-    // check button on MCU module itself (beside RESET button)
-    uint32_t pressedFor = HackFFMBadge.but0PressedFor();
-    uint32_t pressedSince = HackFFMBadge.but0PressedSince();
-    if((pressedFor > 0) || (pressedSince > 0)) {
-      LL_Log.printf("PressedFor: %d, PressedSince: %d\r\n", pressedFor, pressedSince);
-    }
-
-    if(pressedFor > 10000) {
-      // Try update firmware from web
-      Badge.drawString("$!$c$8$+$+$+$+$+$+$+Try update...");
-      Badge.tryToUpdate();
-    } else if(pressedFor > 5000) {
-      Badge.drawString("$!$c$8$+$+$+$+$+$+$+Power off...");
-      delay(1000);
-      HackFFMBadge.powerOff();
-    } else if(pressedFor > 1000) {
-      LL_Log.println("Long Press");
-      debugTouch = !debugTouch;
-      if(debugTouch) {
-        LL_Log.println("Debug Touch ON");
-        Badge.drawString("$!$c$8$+$+$+$+$+$+$+Debug Touch ON");
-      } else {
-        LL_Log.println("Debug Touch OFF");
-        Badge.drawString("$!$c$8$+$+$+$+$+$+$+Debug Touch OFF");
-      }
-      delay(1000);
-    } else if(pressedFor > 0) {
-      LL_Log.println("Short Press");
-      emo++;
-      if(emo>=EMOTIONS_COUNT) emo = 0;
-      Badge.face().RandomBehavior = false; // Stop random emotions
-      Badge.face().Behavior.GoToEmotion((eEmotions)emo);
-      LL_Log.printf("Set emotion: %s\r\n", Badge.face().Behavior.GetEmotionName((eEmotions)emo));
-    }
+  float x = Badge.lastTouchX;
+  float y = Badge.lastTouchY;
+  /* // Now via menu
+  if(y < -3.0) {
+      if(Badge.tryFindDoor() == true) {
+        char buf[128]; sprintf(buf, "$!$c$8$+$+Door found %d:\n%s\nTry closing...", Badge.espNowRxRssi, Badge.door_name);
+        LL_Log.println("Door found");
+        Badge.drawString(buf);
+        Badge.tryCloseDoor();
+        delay(3000);
+      } 
   }
-
-  /*  if(HackFFMBadge.isNewTouchDataAvailable()) */ 
-  {
-      float x = Badge.lastTouchX;
-      float y = Badge.lastTouchY;
-      if(y < -3.0) {
-        CurrentActionTimer = 0;
-        CurrentAction = 3; // show name
-        if(Badge.tryFindDoor() == true) {
-          char buf[128]; sprintf(buf, "$!$c$8$+$+Door found %d:\n%s\nTry closing...", Badge.espNowRxRssi, Badge.door_name);
-          LL_Log.println("Door found");
-          Badge.drawString(buf);
-          Badge.tryCloseDoor();
-          delay(3000);
-        } 
-      }
-      if(y > 3.0) {
-        CurrentActionTimer = 0;
-        CurrentAction = 3; // show name
-        if(Badge.tryFindDoor() == true) {
-          char buf[128]; sprintf(buf, "$!$c$8$+$+Door found %d:\n%s\nTry opening...", Badge.espNowRxRssi, Badge.door_name);
-          LL_Log.println("Door found");
-          Badge.drawString(buf);
-          Badge.tryOpenDoor();
-          delay(3000);
-        } 
-      }
-      x = constrain(x, -2.0, 2.0);
-      y = constrain(y, -2.0, 2.0);
-      if(debugTouch) {
-        LL_Log.printf("Touch LU:%.2f LD:%.2f RU:%.2f RD:%.2f %.2f:%.2f\r\n", HackFFMBadge.lastTouchLU, HackFFMBadge.lastTouchLD,
-          HackFFMBadge.lastTouchRU, HackFFMBadge.lastTouchRD, x, y);
-        u8g2.setDrawColor(0);
-        u8g2.drawCircle(int(x*128.0+64), int(y*64.0+32), 4);
-        u8g2.setDrawColor(1);
-        u8g2.drawCircle(int(x*128.0+64), int(y*64.0+32), 5);
-        if(Badge.isTouchLU()) u8g2.drawBox(0, 0, 2, 32);
-        if(Badge.isTouchLD()) u8g2.drawBox(0, 32, 2, 32);
-        if(Badge.isTouchRU()) u8g2.drawBox(126, 0, 2, 32);
-        if(Badge.isTouchRD()) u8g2.drawBox(126, 32, 2, 32);
-        if(Badge.isTouchLUStrong()) u8g2.drawBox(2, 0, 8, 8);
-        if(Badge.isTouchRUStrong()) u8g2.drawBox(118, 0, 8, 8);
-           
-      }
-      Badge.face().Look.LookAt(-x, -y); 
-    }
-
-
+  if(y > 3.0) {
+      if(Badge.tryFindDoor() == true) {
+        char buf[128]; sprintf(buf, "$!$c$8$+$+Door found %d:\n%s\nTry opening...", Badge.espNowRxRssi, Badge.door_name);
+        LL_Log.println("Door found");
+        Badge.drawString(buf);
+        Badge.tryOpenDoor();
+        delay(3000);
+      } 
+  }
+  */
+  x = constrain(x, -2.0, 2.0);
+  y = constrain(y, -2.0, 2.0);
+  Badge.face().Look.LookAt(-x, -y); 
   
+  if(debugTouch) doDebugTouch();
 
   // Process commands from the command line
   processCommands();
   
   // Write to display
   u8g2.sendBuffer();  
-  
+
+  // Optionally transfer display data to external display (big Hackerspace-FFM mannequin)
+  if(Badge.txDisplayChannel > 0) Badge.txDisplaydata(Badge.txDisplayChannel);
+
+  // Idle this way disturbs USB serial connection - reduced CPU frequency instead to 80 Mhz
   if(idleTime > 0) {
     esp_sleep_enable_timer_wakeup(idleTime * 1000);
     esp_light_sleep_start();
@@ -317,6 +206,7 @@ void loop() {
 void processCommands() {
   if(LL_Log.receiveLineAvailable()) {
     LL_Log.println(LL_Log.receiveLine);
+
     if(LL_Log.receiveLine[0]=='B') {
       int data;
       if(sscanf(&LL_Log.receiveLine[1],"%d",&data)>=1) {
@@ -324,7 +214,7 @@ void processCommands() {
         u8g2.setContrast(data);
       }
     }  
-    if(LL_Log.receiveLine[0]=='w') {
+    if(LL_Log.receiveLine[0]=='W') {
       int addr, data;
       if(sscanf(&LL_Log.receiveLine[1],"%d %d",&addr, &data)>=2) {
         LL_Log.printf("Addr: %d, Data: %d\r\n", addr, data);
@@ -343,10 +233,11 @@ void processCommands() {
         LL_Log.printf("Bade name: %s\r\n",  Badge.userName);
       }
 
-      CurrentActionTimer = 0;
-      CurrentAction = 3; // show name
+      durationShowTimer = 0;
+      currentShowDuration = durationShowName;
+      currentShow = 1; // show name
     } 
-    if(LL_Log.receiveLine[0]=='p') {
+    if(LL_Log.receiveLine[0]=='P') {
       char data[128];
       if(sscanf(&LL_Log.receiveLine[1],"%127[^\n]",&data)>=1) {
         bool gkstat = Badge.genKey(data);
@@ -366,13 +257,31 @@ void processCommands() {
     if(LL_Log.receiveLine[0]=='i') {
       int data;
       if(sscanf(&LL_Log.receiveLine[1],"%d",&data)>=1) {
-        LL_Log.printf("Idle time: %d\r\n",  data);
-        idleTime = data;
+        //LL_Log.printf("Idle time: %d\r\n",  data);
+        //idleTime = data;
+        esp_pm_config_t pm_config = {
+          .max_freq_mhz = 240,
+          .min_freq_mhz = 10,
+          .light_sleep_enable = false
+        };
+        
+        switch(data) {
+          case 0: pm_config.max_freq_mhz = 240; break;
+          case 1: pm_config.max_freq_mhz = 160; break;
+          case 2: pm_config.max_freq_mhz = 80; break;
+          case 3: pm_config.max_freq_mhz = 40; break;
+          case 4: pm_config.max_freq_mhz = 20; break;
+          case 5: pm_config.max_freq_mhz = 10; break;
+        }
+        ESP_ERROR_CHECK(esp_pm_configure(&pm_config));
       } else {
         LL_Log.printf(" Loop() - Free Stack Space: %d\n", uxTaskGetStackHighWaterMark(NULL));
+        LL_Log.printf(" CPU_Freq: %d MHz\r\n", ESP.getCpuFreqMHz());
       }
+     // LL_Log.printf(" u8g2: %d \r\n", u8g2.getBufferSize());
+     // Badge.txDisplaydata(13);
     }
-    if(LL_Log.receiveLine[0]=='d') {
+    if(LL_Log.receiveLine[0]=='D') {
       char data[128];
       if(sscanf(&LL_Log.receiveLine[1],"%127[^\n]",&data)>=1) {
         String del_name = "/" + String(data);
@@ -389,7 +298,7 @@ void processCommands() {
       }
     }
     if(LL_Log.receiveLine[0]=='a') {
-      setup2();
+      //setup2();
     }
   }
 }

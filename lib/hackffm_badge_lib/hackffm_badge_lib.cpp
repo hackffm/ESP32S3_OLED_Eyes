@@ -15,6 +15,8 @@
 #include <ESPmDNS.h>
 #include <HTTPClient.h>
 #include <Update.h>
+//#include <SimpleFTPServer.h>
+#include <MultiFTPServer.h>
 
 #include <esp_now.h>
 #include <esp_log.h>
@@ -22,6 +24,9 @@
 
 // Peter Schatzmann Libs for Audio and Tasks
 #include "freertos-all.h"
+#include "AudioTools.h"
+#include "AudioTools/Disk/AudioSourceLittleFS.h"
+#include "AudioTools/AudioCodecs/CodecMP3Helix.h"
 
 #include "hal/usb_serial_jtag_ll.h"
 //#include "hal/usb_phy_ll.h"
@@ -55,6 +60,63 @@ uint8_t u8log_buffer[U8LOG_WIDTH*U8LOG_HEIGHT];
 #define VERSION_URL  "http://192.168.4.1/hackffmbadgev1_vers.txt"  // URL zur Versionsdatei
 
 #define ESPNOW_CHANNEL 13
+uint8_t espnow_tx_buf[ESP_NOW_MAX_DATA_LEN_V2 + 1]; // Buffer for ESPNOW Tx data
+extern "C" void rom_phy_disable_cca();
+
+FtpServer ftpSrv;
+
+HardwareSerial UARTSerial(2);
+
+I2SStream audio_i2s;
+MP3DecoderHelix mp3_decoder;
+
+void HackFFMBadgeLib::playMP3(const char *filename) {
+  AudioInfo info(44100, 2, 16);
+
+  const char *startFilePath="/";
+  const char* ext="mp3";
+  audio_tools::AudioSourceLittleFS source(startFilePath, ext);
+  source.selectStream(filename);
+  AudioPlayer player(source, audio_i2s , mp3_decoder);
+
+  Badge.setPowerAudio(true);
+  while(Serial.available()) Serial.read();
+
+  LL_Log.println("Audio start");
+  AudioToolsLogger.begin(Serial, AudioToolsLogLevel::Info);
+
+  // setup output
+  auto cfg = audio_i2s.defaultConfig(TX_MODE);
+  cfg.copyFrom(info);
+  cfg.signal_type = PDM; 
+  cfg.pin_data = HackFFMBadge.pinAudio;
+  cfg.pin_bck = 17; // need a clock pin for PDM even if not used
+  audio_i2s.begin(cfg);
+
+//  auto config = pwm.defaultConfig();
+//  config.copyFrom(info);
+//  config.start_pin = HackFFMBadge.pinAudio;
+//  pwm.begin(config);
+  
+
+  // setup player
+  //source.setFileFilter("*Bob Dylan*");
+  player.setMetadataCallback([](MetaDataType type, const char* str, int len){
+    Serial.print("==> ");
+    Serial.print(toStr(type));
+    Serial.print(": ");
+    Serial.println(str);
+  });
+  player.setVolume(1.0);
+  player.begin();
+  
+  while(!Serial.available() && player.isActive()) {
+    player.copy();
+  }
+  LL_Log.println("Audio done");
+  Badge.setPowerAudio(false);
+
+}
 
 /**
  * Protocol Tx:
@@ -178,10 +240,18 @@ void on_data_recv(const uint8_t *mac_addr, const uint8_t *data, int len) {
 
 // Callback transmit
 void on_data_sent(const uint8_t *mac, esp_now_send_status_t status) {
-  Serial.printf("Sendestatus: %s", status == ESP_NOW_SEND_SUCCESS ? "Erfolg" : "Fehler");
+  if(status != ESP_NOW_SEND_SUCCESS) {
+    Serial.printf("ESP-NOW Send failed, status: %d\r\n", status);
+  } else {
+    //Serial.write('°');
+  }
 }
 
 bool HackFFMBadgeLib::tryFindDoor() {
+  if(txDisplayChannel > 0) {
+    LL_Log.println("ESP-Now used already for display tx!");
+    return false;
+  }
   // Open ESPNOW with timeout and send get challenge
   if(findDoorState > 0) {
     // LL_Log.println("Find door already in progress");
@@ -252,6 +322,118 @@ void HackFFMBadgeLib::tryCloseDoor() {
   }
 }
 
+bool HackFFMBadgeLib::txDisplaydata(int channel) {
+  // Open ESPNOW with timeout and send get challenge
+  if(findDoorState > 0) {
+    // LL_Log.println("Find door already in progress");
+    return false;
+  }
+  
+  // Turn off if channel is 0
+  if(channel < 1) {
+    if((txDisplayChannel > 0) && (txDisplayChannel <= 13)) {
+      esp_now_deinit();
+      WiFi.mode(WIFI_OFF);
+    }
+    txDisplayChannel = 0;
+    return false;
+  }
+
+  // Peer-Info konfigurieren (Broadcast)
+  esp_now_peer_info_t peer = {
+    .peer_addr = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF},
+    .channel = (uint8_t)channel,
+    .encrypt = false
+  };
+  
+  espnow_tx_buf[0] = 'B';
+  espnow_tx_buf[1] = 'A';
+  espnow_tx_buf[2] = 'D'; 
+  espnow_tx_buf[3] = 'G';
+  espnow_tx_buf[4] = 'S';
+  espnow_tx_buf[5] = 'C'; 
+  espnow_tx_buf[6] = 'R';
+  espnow_tx_buf[7] = 'N';
+  // put last 2 bytes of ESP Mac address into the buffer
+  uint8_t mac[6];
+  esp_err_t ret = esp_wifi_get_mac(WIFI_IF_STA, mac);
+  espnow_tx_buf[8] =  mac[4];
+  espnow_tx_buf[9] =  mac[5];
+  // Set color for pixel = 0
+  espnow_tx_buf[10] = 0; // Red
+  espnow_tx_buf[11] = 0; // Green
+  espnow_tx_buf[12] = 0; // Blue
+  espnow_tx_buf[13] = 0; // Alpha
+  // Set color for pixel = 1
+  espnow_tx_buf[14] = 0xff; // Red
+  espnow_tx_buf[15] = 0xff; // Green 
+  espnow_tx_buf[16] = 0xff; // Blue
+  espnow_tx_buf[17] = 0; // Alpha
+  
+  //espnow_tx_buf[14] = antennaLED.getPixelColor(0) >> 16; // Red
+  //espnow_tx_buf[15] = antennaLED.getPixelColor(0) >> 8;  // Green
+  //espnow_tx_buf[16] = antennaLED.getPixelColor(0) & 0xff; // Blue
+
+  // Copy display data to buffer
+  uint8_t *disbuf = u8g2.getBufferPtr();
+  for(int i = 0; i < 128*64/8; i++) {
+    espnow_tx_buf[18+i] = disbuf[i];
+  }
+
+  static elapsedMillis rateLimit = 0;
+
+  if(channel <= 13) {
+    if(channel != txDisplayChannel) {
+      wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+      ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+      ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+      ESP_ERROR_CHECK(esp_wifi_start());
+      ESP_ERROR_CHECK(esp_wifi_set_channel((uint8_t)channel, WIFI_SECOND_CHAN_NONE));
+    
+      // ESP-NOW-Init
+      ESP_ERROR_CHECK(esp_now_init());
+      esp_now_register_recv_cb(on_data_recv);
+      esp_now_register_send_cb(on_data_sent);
+    
+      ESP_ERROR_CHECK(esp_now_add_peer(&peer));
+    
+      esp_wifi_set_max_tx_power(60); // 11 dbm
+      txDisplayChannel = channel;
+
+      esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G|WIFI_PROTOCOL_11N /* |WIFI_PROTOCOL_LR */);
+
+      esp_now_rate_config_t en_rateconfig = {
+        .phymode = WIFI_PHY_MODE_HT20, // WIFI_PHY_MODE_11G,
+        .rate = WIFI_PHY_RATE_MCS4_LGI,
+       // .rate = WIFI_PHY_RATE_36M,
+        .ersu = false,   
+        .dcm = false,
+      };
+      esp_now_set_peer_rate_config(peer.peer_addr, &en_rateconfig);
+      // rom_phy_disable_cca();
+    }
+    if(rateLimit > 20) {
+      ESP_ERROR_CHECK(esp_now_send(peer.peer_addr, espnow_tx_buf, 1024+18));
+      rateLimit = 0;
+    }
+  } else if (channel == 20) {
+    // Use serial tx instead of ESPNOW
+    if(channel != txDisplayChannel) {
+      txDisplayChannel = channel;
+      UARTSerial.setRxBufferSize(2048);
+      UARTSerial.setTxBufferSize(2048);
+      UARTSerial.begin(4000000, SERIAL_8N1, 44, 43); 
+    }
+
+    if(rateLimit >= 2) {
+      UARTSerial.write(espnow_tx_buf, 1024+18);
+      rateLimit = 0;
+    }
+  }    
+
+  return true;
+}
+
 void HackFFMBadgeLib::begin() {
   // Face must be created early, maybe some memory initialization issues there in... (weird eyes come out)
   //if(face_) delete face_;
@@ -262,6 +444,7 @@ void HackFFMBadgeLib::begin() {
   pinMode(5, OUTPUT); digitalWrite(5, LOW); 
   pinMode(6, OUTPUT); digitalWrite(6, LOW);
   pinMode(7, OUTPUT); digitalWrite(7, LOW);
+  //pinMode(10, OUTPUT); pinMode(11, OUTPUT); digitalWrite(10, HIGH); digitalWrite(11, HIGH); 
   
   // Power on OLED
   // Conserve power (to allow CR123 battery operation)
@@ -271,7 +454,7 @@ void HackFFMBadgeLib::begin() {
   // Activate Serial but wait no longer than 1s to be ready
   Serial.begin(115200); // Baudrate does not matter as it is done via USB CDC...
   elapsedMillis serialUpTimeout = 0;
-  while (!Serial && serialUpTimeout < 1000) {
+  while (!Serial && serialUpTimeout < 500) {
     delay(1);
   }
   LL_Log.begin(115200, 2222); // Serial baud (not used), TCP Port
@@ -346,21 +529,21 @@ void HackFFMBadgeLib::begin() {
   //face().RandomLook = true;  
 
 
-  delay(3000);
+  delay(2000);
   Serial.println("HackFFM Badge initialized");
 }
 
 // Touch sensor update, ArduinoOTA and Face update
 void HackFFMBadgeLib::update() {
-  if(lastTouchRead > 100) {
+  if(lastTouchRead > 50) {
     lastTouchRead = 0;
     for(int i = 0; i < NUM_TOUCH_PINS; i++) {
       touch[i].update();
     }
-    lastTouchLU = (float)touch[0].getTouchValue() / 50.0;
-    lastTouchLD = (float)touch[1].getTouchValue() / 50.0;
-    lastTouchRU = (float)touch[2].getTouchValue() / 50.0;
-    lastTouchRD = (float)touch[3].getTouchValue() / 50.0;
+    lastTouchLU = (float)touch[0].getTouchValue() / 250.0;
+    lastTouchLD = (float)touch[1].getTouchValue() / 250.0;
+    lastTouchRU = (float)touch[2].getTouchValue() / 250.0;
+    lastTouchRD = (float)touch[3].getTouchValue() / 250.0;
     lastTouchX = (-lastTouchLU) + (-lastTouchLD) + (lastTouchRU) + (lastTouchRD);
     lastTouchY = (-lastTouchLU) + (-lastTouchRU) + (lastTouchLD) + (lastTouchRD);
     touchUpdated = true;
@@ -378,6 +561,7 @@ void HackFFMBadgeLib::update() {
       ArduinoOTA.handle();
     }
   } 
+  ftpSrv.handleFTP(); 
 
   if(findDoorState > 0) {
     if(findDoorTimeout > 4000) {
@@ -659,8 +843,8 @@ void HackFFMBadgeLib::drawString(const char *str, int x, int y, int dy, bool noD
           case 'e': u8g2.setFont(u8g2_font_fub14_tf); break; // 11.5
           case 'f': u8g2.setFont(u8g2_font_chargen_92_tf); break; //10.9
           case 'g': u8g2.setFont(u8g2_font_inr21_mf); break; // ?
-          case 's': u8g2.setFont(u8g2_font_sticker100complete_te); break; // ?
-          case 'i': u8g2.setFont(u8g2_font_m2icon_9_tf); break;
+        //  case 's': u8g2.setFont(u8g2_font_sticker100complete_te); break; // ?
+        //  case 'i': u8g2.setFont(u8g2_font_m2icon_9_tf); break;
                              
         }
       } else {
@@ -708,7 +892,7 @@ void HackFFMBadgeLib::initOLED() {
   // make it faster
   u8g2.setBusClock(1000000UL);
 
-  // dim display down 
+  // dim display down
   //u8g2.sendF("ca", 0xdb, 0); // not for SH1106 - need af (e3) afterwards
   //u8g2.sendF("ca", 0xd9, 0x2f);
   //u8g2.sendF("ca", 0xaf); // reactivate if display turns off (SH1106 need it)
@@ -1049,7 +1233,7 @@ bool HackFFMBadgeLib::connectWifi(const char* ssid, const char* password) {
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
   WiFi.setTxPower(WIFI_POWER_7dBm);
-  WiFi.setSleep(true);
+  //WiFi.setSleep(true);
   int tries = 0;
   LL_Log.println("Connecting to WiFi..");
   while ((WiFi.status() != WL_CONNECTED) && (tries < 20)) {
@@ -1063,6 +1247,10 @@ bool HackFFMBadgeLib::connectWifi(const char* ssid, const char* password) {
     LL_Log.print("IP address: ");
     LL_Log.println(WiFi.localIP());
     setupOTA();
+  
+    LL_Log.println("Start FTP server on port 21");
+    ftpSrv.begin();    //username, password for ftp.   (default 21, 50009 for PASV)
+  
     ret = true;
   } else {
     LL_Log.println("Connection failed.");
@@ -1109,6 +1297,7 @@ void HackFFMBadgeLib::setupOTA() {
   
   MDNS.begin(hostName);
   MDNS.addService("debug", "tcp", 2222);
+  MDNS.addService("ftp", "tcp", 21);
 }
 
 void HackFFMBadgeLib::tryToUpdate() {
@@ -1196,6 +1385,15 @@ float mapFloat(float x, float in_min, float in_max, float out_min, float out_max
 
   // Map the proportion to the output range and return the result
   return (proportion * (out_max - out_min)) + out_min;
+}
+
+int utf8_charlen(const char *s) {
+    unsigned char c = (unsigned char)*s;
+    if (c < 0x80) return 1;             // ASCII
+    else if ((c & 0xE0) == 0xC0) return 2;
+    else if ((c & 0xF0) == 0xE0) return 3;
+    else if ((c & 0xF8) == 0xF0) return 4;
+    else return 1; // just continue
 }
 
 bool is_host_usb_device_connected(void)

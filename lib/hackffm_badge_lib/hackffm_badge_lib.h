@@ -21,9 +21,10 @@ extern U8G2LOG u8g2log;
 #define U8G2_DISP_HEIGHT 64
 
 float mapFloat(float x, float in_min, float in_max, float out_min, float out_max);
+int utf8_charlen(const char *s);
 size_t hex2bytes(const char *hexString, uint8_t *byteArray, size_t byteArrayLen);
 void   bytes2hex(const uint8_t *byteArray, size_t byteArrayLen, char *hexString);
-
+bool is_host_usb_device_connected(void);
 
 class touchProcessor {
   public:
@@ -33,34 +34,28 @@ class touchProcessor {
     }
     void update() {
       if(_pin < 0) return;
-      _lastTouchValue = touchRead(_pin)/16;
+      _lastTouchValue = touchRead(_pin)/2;
       if(_touchAvgValue == 0) _touchAvgValue = _lastTouchValue;
-      if(_touched) {
-        _touchAvgValue = _touchAvgValue * 0.99 + _lastTouchValue * 0.01;
-      } else {
-        _touchAvgValue = _touchAvgValue * 0.95 + _lastTouchValue * 0.05;
-      }
       _touchValue = _lastTouchValue - _touchAvgValue;
-      if(_touchValue > 20) {
-        _touched = true;
-      } else {
-        _touched = false;
-      }
+      _touchAvgValue += ((_touchValue > 0)?1:-1); 
+      _touched = (_touchValue > 160)?true:false; 
     }
-    bool isTouched() {
-      return _touched;
-    }
-    int getTouchValue() {
-      return _touchValue;
-    }
-    int getLastTouchValue() {
-      return _lastTouchValue;
+    bool isTouched() { return _touched; }
+    int32_t getTouchValue() { return _touchValue; }
+    int32_t getLastTouchValue() { return _lastTouchValue; }
+    int32_t getTouchAvgValue() { return _touchAvgValue; }
+    void setPin(int pin) {
+      _pin = pin;
+      _lastTouchValue = 0;
+      _touchAvgValue = 0;
+      _touchValue = 0;
+      _touched = false;
     }
   private:
     int _pin = -1;
-    uint32_t _lastTouchValue;
-    uint32_t _touchAvgValue;
-    uint32_t _touchValue;
+    int32_t _lastTouchValue;
+    int32_t _touchAvgValue;
+    int32_t _touchValue;
     bool _touched;
 };
 
@@ -94,8 +89,8 @@ class HackFFMBadgeLib {
     bool isTouchLD() { return touch[1].isTouched(); }
     bool isTouchRU() { return touch[2].isTouched(); }
     bool isTouchRD() { return touch[3].isTouched(); }
-    bool isTouchLUStrong() { return touch[0].getTouchValue() > 100; }
-    bool isTouchRUStrong() { return touch[2].getTouchValue() > 100; }
+    bool isTouchLUStrong() { return touch[0].getTouchValue() > 1500; }
+    bool isTouchRUStrong() { return touch[2].getTouchValue() > 1500; }
 
     void listDir(const char *dirname = "/", uint8_t levels = 1);
     bool writeFile(const char *path, const String &data);
@@ -161,7 +156,11 @@ class HackFFMBadgeLib {
     int8_t  espNowRxRssi = 0; // Last Rx RSSI 
     char    lastFoundDoorName[34]; // Last found door name
 
+    void playMP3(const char *filename);
     void playStartSound();
+
+    bool txDisplaydata(int channel); // channel = 0: stop 
+    int  txDisplayChannel = 0;
 
   private:
     void detectHardware();
