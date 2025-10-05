@@ -31,6 +31,10 @@
 #include "hal/usb_serial_jtag_ll.h"
 //#include "hal/usb_phy_ll.h"
 
+#include <vector>
+#include <string>
+#include <sstream>
+
 #include "LL_Lib.h"
 
 HackFFMBadgeLib HackFFMBadge;
@@ -881,6 +885,152 @@ void HackFFMBadgeLib::drawString(const char *str, int x, int y, int dy, bool noD
   if(!noDraw) u8g2.sendBuffer();
 
 }
+
+// Function to retrieve name without all $-Escape squences removed
+String HackFFMBadgeLib::getCleanName(const char *str) {
+  String name = "";
+  char c;
+  int  idx = 0;
+  int  len = strlen(str);
+  int  dsFlags = 0; 
+
+  do {
+    c = *str++;
+    if(dsFlags & 1) {
+      dsFlags &= ~(1);
+      switch(c) {
+        case '$': name += c; break;
+        case 'n': c = '\n'; name += c; break;
+        default: break;       
+      }
+    } else {
+      if(c=='$') {
+        dsFlags |= 1;
+      } else {
+        name += c;
+      }        
+    }
+  } while((c) && (idx++ < len));  
+  return name;
+}
+
+// Helper function: split string by delimiter
+static std::vector<std::string> split(const std::string &s, char delimiter) {
+    std::vector<std::string> tokens;
+    std::stringstream ss(s);
+    std::string item;
+    while (std::getline(ss, item, delimiter)) {
+        tokens.push_back(item);
+    }
+    return tokens;
+}
+
+// Helper: split string by delimiter (keeps behavior for "\n")
+static std::vector<std::string> splitByChar(const std::string &s, char delim) {
+    std::vector<std::string> out;
+    std::string cur;
+    for (char c : s) {
+        if (c == delim) {
+            out.push_back(cur);
+            cur.clear();
+        } else {
+            cur.push_back(c);
+        }
+    }
+    out.push_back(cur);
+    return out;
+}
+
+// Helper: determine UTF-8 character length from the first byte
+static size_t utf8_char_len(unsigned char c) {
+    if ((c & 0x80) == 0x00) return 1;
+    if ((c & 0xE0) == 0xC0) return 2;
+    if ((c & 0xF0) == 0xE0) return 3;
+    if ((c & 0xF8) == 0xF0) return 4;
+    return 1; // fallback (invalid byte)
+}
+
+// Function to draw UTF-8 centered multiline text with auto line-breaking
+int HackFFMBadgeLib::drawCenteredUTF8Text(const char *str, bool noDraw) {
+    // font list: descending sizes
+    const uint8_t* fonts[] = {
+        u8g2_font_helvB24_tf,
+        u8g2_font_helvB18_tf,
+        u8g2_font_helvB14_tf,
+        u8g2_font_helvB12_tf,
+        u8g2_font_helvB10_tf,
+        u8g2_font_helvB08_tf
+    };
+    const int fontCount = sizeof(fonts) / sizeof(fonts[0]);
+
+    std::string input = str ? str : "";
+
+    for (int fontIndex = 0; fontIndex < fontCount; ++fontIndex) {
+        u8g2.setFont(fonts[fontIndex]);
+        u8g2.setFontPosBaseline();
+
+        int ascent = u8g2.getAscent();
+        int descent = -u8g2.getDescent();
+        int lineHeight = ascent + descent;
+
+        int displayW = u8g2.getDisplayWidth();
+        int displayH = u8g2.getDisplayHeight();
+
+        std::vector<std::string> finalLines;
+        bool tooWide = false;
+
+        // Split into paragraphs by \n
+        std::vector<std::string> paragraphs = splitByChar(input, '\n');
+
+        for (const auto &para : paragraphs) {
+            std::istringstream iss(para);
+            std::string word, line;
+
+            while (iss >> word) {
+                int wordWidth = u8g2.getUTF8Width(word.c_str());
+                if (wordWidth > displayW) {
+                    // A single word doesn't fit on screen -> try smaller font
+                    tooWide = true;
+                    break;
+                }
+
+                std::string testLine = line.empty() ? word : line + " " + word;
+                if (u8g2.getUTF8Width(testLine.c_str()) <= displayW) {
+                    line = testLine;
+                } else {
+                    finalLines.push_back(line);
+                    line = word;
+                }
+            }
+            if (tooWide) break;
+            if (!line.empty()) finalLines.push_back(line);
+        }
+
+        if (tooWide) continue;
+
+        int totalHeight = finalLines.size() * lineHeight;
+        if (totalHeight > displayH) continue;  // text block too tall for this font
+
+        // Everything fits → render centered
+        u8g2.clearBuffer();
+
+        int firstBaselineY = (displayH - totalHeight) / 2 + ascent;
+        for (size_t i = 0; i < finalLines.size(); ++i) {
+            int lineW = u8g2.getUTF8Width(finalLines[i].c_str());
+            int x = (displayW - lineW) / 2;
+            int y = firstBaselineY + (int)i * lineHeight;
+            u8g2.drawUTF8(x, y, finalLines[i].c_str());
+        }
+
+        if(!noDraw) u8g2.sendBuffer();
+        return fontIndex;  // success
+    }
+
+    // nothing fit
+    return -1;
+}
+
+
 
 void HackFFMBadgeLib::initOLED() {
   // Unlike almost every other Arduino library (and the I2C address scanner script etc.)

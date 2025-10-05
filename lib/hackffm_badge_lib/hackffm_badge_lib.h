@@ -113,6 +113,8 @@ class HackFFMBadgeLib {
       */
     void drawString(const char *str, int x = 0, int y = 0, int dy = 2, bool noDraw = false); 
 
+    int drawCenteredUTF8Text(const char *str, bool noDraw = false);
+
     void drawLog(bool noDraw = false);
 
     void drawBMP(const char *filename, bool noDraw = false);
@@ -146,7 +148,9 @@ class HackFFMBadgeLib {
     bool OTAinProgress = false;
 
     char hostName[32] = "hackffm-badge\0"; // add MAC address to make it unique
-    char userName[128] = "$cHackFFM$nBadge\0";
+    char userName[128] = "$fHackFFM$nBadge\0";
+
+    String getCleanName(const char *str); // use this to clean userName for display
 
     fs::FS &filesystem = LittleFS; // default LittleFS
 

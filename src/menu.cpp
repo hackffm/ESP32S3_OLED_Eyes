@@ -429,13 +429,14 @@ void doMenu() {
       // prepare selection line with spaces
       {
         int i;
-        for(i = 0; i < 12; i++) {
+        int cpycnt = 24;
+        for(i = 0; i < cpycnt; i++) {
           menu_selection_line[i*2] = ' ';
           menu_selection_line[i*2+1] = '\n';
         } 
         menu_selection_line[i*2] = 0; // null terminate
         menu_selection_line[i*2+1] = 0; // null terminate
-        for(i = 0; i < 12; i++) {
+        for(i = 0; i < cpycnt; i++) {
           char c = menu_selection_line_alt[i];
           if(c == 0) break; // end of string
           menu_selection_line[i*2] = c; // copy character

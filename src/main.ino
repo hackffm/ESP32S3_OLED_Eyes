@@ -24,8 +24,8 @@ const int EYESTYLES_MAX = 2; // 0 = normal, 1 = also normal, 2 = raster lines
 int currentEmotion = -1; // -1 = random behaviour, 0..EMOTIONS_COUNT = specific emotion
 int currentEyeStyle = -1; // -2 = raster but changes, -1 = normal but changes, 0 = normal, 1 = also normal, 2 = raster lines
 int durationShowEyes = 30000; // 30 seconds
-int durationShowName = 3000;
-int durationShowLogo = 3000;
+int durationShowName = 5000;
+int durationShowLogo = 2000;
 int currentShow = 0; // 0 = eyes, 1 = name, 2 = logo
 int currentShowDuration = 0;
 elapsedMillis durationShowTimer = 0;
@@ -92,6 +92,7 @@ void setup() {
 
 // Shows eyes, logo, name and cycles through those
 void doShow() {
+  static int nameFade = 0;
   // Cycle when currentShowDuration is over
   if(durationShowTimer > currentShowDuration) {
     durationShowTimer = 0;
@@ -106,7 +107,7 @@ void doShow() {
           if(currentEyeStyle < -(EYESTYLES_MAX)) currentEyeStyle = -1; // reset to normal
         }
         break;
-      case 1: currentShowDuration = durationShowName; break;
+      case 1: currentShowDuration = durationShowName; nameFade = 128; break;
       case 2: currentShowDuration = durationShowLogo; break;
     }
   }
@@ -125,14 +126,27 @@ void doShow() {
           u8g2.setDrawColor(1);
         }
         break;
-      case 1: 
+      case 1: // Show user name, if not starting with $ then auto-size font
         u8g2.setDrawColor(1);
-        //Badge.face().UpdateBuffer();
-        {
-        String showuser = "$c$3$+$+$+$+";
-        showuser.concat(Badge.userName);
-        showuser.replace(" ", "$n");
-        Badge.drawString(showuser.c_str(),0,0,2,true);
+        if(Badge.userName[0] == '$') {
+          String showuser = "$c$3$+$+$+$+";
+          showuser.concat(Badge.userName);
+          //showuser.replace(" ", "$n");
+          Badge.drawString(showuser.c_str(),0,0,2,true);
+        } else { 
+          Badge.drawCenteredUTF8Text(Badge.getCleanName(Badge.userName).c_str(),true);
+        }
+        // Add fading effect
+        if(nameFade > 0) {
+          u8g2.setDrawColor(0);
+          for(int y = 0; y < 64; y+=4) {
+            u8g2.drawHLine(0,y,nameFade);
+            u8g2.drawHLine(0,y+1,nameFade);
+            u8g2.drawHLine(128-nameFade,y+2,nameFade);
+            u8g2.drawHLine(128-nameFade,y+3,nameFade);
+          }
+          u8g2.setDrawColor(1);
+          nameFade-=3;
         }
         break;
       case 2: // logo
@@ -155,30 +169,10 @@ void loop() {
   
   LL_Log.update(); 
 
-  doMenu();
+  doMenu(); // Overpaint if Menu is active
 
   float x = Badge.lastTouchX;
   float y = Badge.lastTouchY;
-  /* // Now via menu
-  if(y < -3.0) {
-      if(Badge.tryFindDoor() == true) {
-        char buf[128]; sprintf(buf, "$!$c$8$+$+Door found %d:\n%s\nTry closing...", Badge.espNowRxRssi, Badge.door_name);
-        LL_Log.println("Door found");
-        Badge.drawString(buf);
-        Badge.tryCloseDoor();
-        delay(3000);
-      } 
-  }
-  if(y > 3.0) {
-      if(Badge.tryFindDoor() == true) {
-        char buf[128]; sprintf(buf, "$!$c$8$+$+Door found %d:\n%s\nTry opening...", Badge.espNowRxRssi, Badge.door_name);
-        LL_Log.println("Door found");
-        Badge.drawString(buf);
-        Badge.tryOpenDoor();
-        delay(3000);
-      } 
-  }
-  */
   x = constrain(x, -2.0, 2.0);
   y = constrain(y, -2.0, 2.0);
   Badge.face().Look.LookAt(-x, -y); 
@@ -261,7 +255,7 @@ void processCommands() {
         //idleTime = data;
         esp_pm_config_t pm_config = {
           .max_freq_mhz = 240,
-          .min_freq_mhz = 10,
+          .min_freq_mhz = 80,
           .light_sleep_enable = false
         };
         
@@ -298,7 +292,9 @@ void processCommands() {
       }
     }
     if(LL_Log.receiveLine[0]=='a') {
-      //setup2();
+
+      Badge.drawCenteredUTF8Text(&LL_Log.receiveLine[1]);
+      delay(10000);
     }
   }
 }
