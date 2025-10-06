@@ -183,7 +183,7 @@ void loop() {
   processCommands();
   
   // Write to display
-  u8g2.sendBuffer();  
+  if(Badge.OledAddress) u8g2.sendBuffer();  
 
   // Optionally transfer display data to external display (big Hackerspace-FFM mannequin)
   if(Badge.txDisplayChannel > 0) Badge.txDisplaydata(Badge.txDisplayChannel);

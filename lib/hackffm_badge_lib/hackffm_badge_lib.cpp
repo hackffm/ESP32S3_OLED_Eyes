@@ -63,7 +63,8 @@ uint8_t u8log_buffer[U8LOG_WIDTH*U8LOG_HEIGHT];
 #define FIRMWARE_URL "http://192.168.4.1/hackffmbadgev1_fw.bin"  // URL zur Firmware
 #define VERSION_URL  "http://192.168.4.1/hackffmbadgev1_vers.txt"  // URL zur Versionsdatei
 
-#define ESPNOW_CHANNEL 13
+#define ESPNOW_CHANNEL 13 /* for door and badge-name com */
+uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 uint8_t espnow_tx_buf[ESP_NOW_MAX_DATA_LEN_V2 + 1]; // Buffer for ESPNOW Tx data
 extern "C" void rom_phy_disable_cca();
 
@@ -79,6 +80,7 @@ void HackFFMBadgeLib::playMP3(const char *filename) {
 
   const char *startFilePath="/";
   const char* ext="mp3";
+  if(!OledAddress) return;
   audio_tools::AudioSourceLittleFS source(startFilePath, ext);
   source.selectStream(filename);
   AudioPlayer player(source, audio_i2s , mp3_decoder);
@@ -263,46 +265,7 @@ bool HackFFMBadgeLib::tryFindDoor() {
     return false;
   }
   
-  // WiFi-Init
-  wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-  ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-  ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-  ESP_ERROR_CHECK(esp_wifi_start());
-  ESP_ERROR_CHECK(esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE));
-
-  // ESP-NOW-Init
-  ESP_ERROR_CHECK(esp_now_init());
-  esp_now_register_recv_cb(on_data_recv);
-  esp_now_register_send_cb(on_data_sent);
-
-  // Peer-Info konfigurieren (Broadcast)
-  esp_now_peer_info_t peer = {
-      .peer_addr = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF},
-      .channel = ESPNOW_CHANNEL,
-      .encrypt = false
-  };
-  ESP_ERROR_CHECK(esp_now_add_peer(&peer));
-
-  wifi_phy_rate_t wifi_rate = WIFI_PHY_RATE_48M; // WIFI_PHY_RATE_MCS5_SGI;
- // wifi_rate = WIFI_PHY_RATE_LORA_250K;
- // wifi_rate = WIFI_PHY_RATE_1M_L;
-  wifi_rate = WIFI_PHY_RATE_24M;
- // wifi_rate = WIFI_PHY_RATE_MCS5_LGI;
- 
-  esp_wifi_set_max_tx_power(44); // 11 dbm
-  
-  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G|WIFI_PROTOCOL_11N /* |WIFI_PROTOCOL_LR */);
-  #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
-  esp_now_rate_config_t en_rateconfig = {
-    .phymode = WIFI_PHY_MODE_HT20, // WIFI_PHY_MODE_11G,
-    .rate = WIFI_PHY_RATE_MCS0_LGI, // WIFI_PHY_RATE_MCS4_SGI,
-    .ersu = false,   
-    .dcm = false,
-  };
-  esp_now_set_peer_rate_config(peer.peer_addr, &en_rateconfig);
-  #else
-  esp_wifi_config_espnow_rate(WIFI_IF_STA,  wifi_rate);
-  #endif
+  startESPNOW(ESPNOW_CHANNEL, WIFI_PHY_RATE_MCS0_LGI, 11 * 4 /* 11 dbm */);
 
   txCommand("c");
   findDoorState = 1;
@@ -343,13 +306,6 @@ bool HackFFMBadgeLib::txDisplaydata(int channel) {
     return false;
   }
 
-  // Peer-Info konfigurieren (Broadcast)
-  esp_now_peer_info_t peer = {
-    .peer_addr = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF},
-    .channel = (uint8_t)channel,
-    .encrypt = false
-  };
-  
   espnow_tx_buf[0] = 'B';
   espnow_tx_buf[1] = 'A';
   espnow_tx_buf[2] = 'D'; 
@@ -388,36 +344,12 @@ bool HackFFMBadgeLib::txDisplaydata(int channel) {
 
   if(channel <= 13) {
     if(channel != txDisplayChannel) {
-      wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-      ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-      ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-      ESP_ERROR_CHECK(esp_wifi_start());
-      ESP_ERROR_CHECK(esp_wifi_set_channel((uint8_t)channel, WIFI_SECOND_CHAN_NONE));
-    
-      // ESP-NOW-Init
-      ESP_ERROR_CHECK(esp_now_init());
-      esp_now_register_recv_cb(on_data_recv);
-      esp_now_register_send_cb(on_data_sent);
-    
-      ESP_ERROR_CHECK(esp_now_add_peer(&peer));
-    
-      esp_wifi_set_max_tx_power(60); // 11 dbm
-      txDisplayChannel = channel;
+      startESPNOW(channel, WIFI_PHY_RATE_MCS4_LGI, 60 /* 15 dbm */);
 
-      esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G|WIFI_PROTOCOL_11N /* |WIFI_PROTOCOL_LR */);
-
-      esp_now_rate_config_t en_rateconfig = {
-        .phymode = WIFI_PHY_MODE_HT20, // WIFI_PHY_MODE_11G,
-        .rate = WIFI_PHY_RATE_MCS4_LGI,
-       // .rate = WIFI_PHY_RATE_36M,
-        .ersu = false,   
-        .dcm = false,
-      };
-      esp_now_set_peer_rate_config(peer.peer_addr, &en_rateconfig);
       // rom_phy_disable_cca();
     }
     if(rateLimit > 20) {
-      ESP_ERROR_CHECK(esp_now_send(peer.peer_addr, espnow_tx_buf, 1024+18));
+      ESP_ERROR_CHECK(esp_now_send(broadcastAddress, espnow_tx_buf, 1024+18));
       rateLimit = 0;
     }
   } else if (channel == 20) {
@@ -435,6 +367,42 @@ bool HackFFMBadgeLib::txDisplaydata(int channel) {
     }
   }    
 
+  return true;
+}
+
+// Start ESP-Now with given parameters
+bool HackFFMBadgeLib::startESPNOW(int channel, wifi_phy_rate_t rate, int8_t txpower) {
+  // WiFi-Init
+  wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+  ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+  ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+  ESP_ERROR_CHECK(esp_wifi_start());
+  ESP_ERROR_CHECK(esp_wifi_set_channel((uint8_t)channel, WIFI_SECOND_CHAN_NONE));
+
+  // ESP-NOW-Init
+  ESP_ERROR_CHECK(esp_now_init());
+  esp_now_register_recv_cb(on_data_recv);
+  esp_now_register_send_cb(on_data_sent);
+
+  // Peer-Info konfigurieren (Broadcast)
+  esp_now_peer_info_t peer = {
+      .peer_addr = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF},
+      .channel = (uint8_t)channel,
+      .encrypt = false
+  };
+  ESP_ERROR_CHECK(esp_now_add_peer(&peer));
+
+  esp_wifi_set_max_tx_power(txpower); // max dbm
+  
+  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G|WIFI_PROTOCOL_11N /* |WIFI_PROTOCOL_LR */);
+  
+  esp_now_rate_config_t en_rateconfig = {
+    .phymode = WIFI_PHY_MODE_HT20, // WIFI_PHY_MODE_11G,
+    .rate = rate, // WIFI_PHY_RATE_MCS4_SGI,
+    .ersu = false,   
+    .dcm = false,
+  };
+  esp_now_set_peer_rate_config(peer.peer_addr, &en_rateconfig);
   return true;
 }
 
@@ -706,6 +674,7 @@ void HackFFMBadgeLib::writeTone(uint32_t freq /* 0 to stop */, uint32_t duty) {
 }
 
 void HackFFMBadgeLib::drawLog(bool noDraw) {
+  if(!OledAddress) return;
   // Align Log-box from lower-left corner
   int logbox_y = u8g2.getDisplayHeight() - (U8LOG_HEIGHT * U8LOG_FONT_Y) - 3;
   u8g2.setFont(U8LOG_FONT);
@@ -735,6 +704,7 @@ struct __attribute__((packed)) BMPHeader {
 };
 
 void HackFFMBadgeLib::drawBMP(const char *filename, bool noDraw) {
+  if(!OledAddress) return;
   File file = filesystem.open(filename, "r");
   if (!file) {
       Serial.println("Can't open file!");
@@ -964,6 +934,7 @@ int HackFFMBadgeLib::drawCenteredUTF8Text(const char *str, bool noDraw) {
     const int fontCount = sizeof(fonts) / sizeof(fonts[0]);
 
     std::string input = str ? str : "";
+    if(!OledAddress) return -1;
 
     for (int fontIndex = 0; fontIndex < fontCount; ++fontIndex) {
         u8g2.setFont(fonts[fontIndex]);
@@ -1033,6 +1004,7 @@ int HackFFMBadgeLib::drawCenteredUTF8Text(const char *str, bool noDraw) {
 
 
 void HackFFMBadgeLib::initOLED() {
+  if(!OledAddress) return;
   // Unlike almost every other Arduino library (and the I2C address scanner script etc.)
   // u8g2 uses 8-bit I2C address, so we shift the 7-bit address left by one
   u8g2.setI2CAddress(OledAddress<<1);
@@ -1054,6 +1026,7 @@ void HackFFMBadgeLib::initOLED() {
 
   u8g2log.begin(U8LOG_WIDTH, U8LOG_HEIGHT, u8log_buffer);	// assign only buffer, update full manual
   u8g2log.print("u8g2log:\r\n");
+  LL_Log.enableU8g2log();
 }
 
 void HackFFMBadgeLib::detectHardware() {
@@ -1154,6 +1127,7 @@ void HackFFMBadgeLib::detectHardware() {
     antennaLED.fill(12, 4, 0); // orange
     setAntennaLED(12, 4, 0); 
   } else {
+    OledAddress = 0;
     Serial.println("No OLED display found - detection of variant not possible, other hardware not available!");
 
     // blink red-blue 5 times
@@ -1164,6 +1138,14 @@ void HackFFMBadgeLib::detectHardware() {
       setBoardLED(0, 0, 4); 
       setAntennaLED(0, 0, 4);
       delay(500);
+      if(digitalRead(0) == LOW) {
+        // Try update firmware if button pressed
+        Serial.println("Button pressed - try OTA update");
+        setBoardLED(8, 8, 0);
+        setAntennaLED(8, 8, 0);
+        tryToUpdate();
+        break;
+      }
     }
     // stay red dark
     setBoardLED(1, 0, 0);
@@ -1315,7 +1297,7 @@ void HackFFMBadgeLib::powerOff() {
   setAntennaLED(0, 0, 0);
 
   // Turn off the OLED display
-  u8g2.setPowerSave(1);
+  if(OledAddress) u8g2.setPowerSave(1);
 
   // Turn off the audio amplifier
   setPowerAudio(false);
@@ -1455,6 +1437,8 @@ void HackFFMBadgeLib::tryToUpdate() {
   if (connectWifi("HACKFFM_BADGE_UPDATER", "")) {
     LL_Log.println("Connected to HACKFFM_BADGE_UPDATER");
     LL_Log.println("Starting OTA update...");
+    setBoardLED(8, 4, 0);
+    setAntennaLED(8, 4, 0);
     HTTPClient http;
     http.begin(VERSION_URL);
     int httpCode = http.GET();
@@ -1473,6 +1457,8 @@ void HackFFMBadgeLib::tryToUpdate() {
             if (Update.begin(contentLength)) {
                 size_t written = Update.writeStream(*stream);
                 if (written == contentLength && Update.end()) {
+                    setBoardLED(0, 8, 0);
+                    setAntennaLED(0, 8, 0);
                     drawString("$c$n$nDone."); delay(3000);
                     ESP.restart();
                 }

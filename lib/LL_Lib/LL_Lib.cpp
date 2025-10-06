@@ -37,7 +37,7 @@ size_t LL_Log_c::write(const uint8_t *buffer, size_t size) {
       }
     }
     #if defined(U8G2_DISPLAYTYPE)
-      u8g2log.write(buffer, size);
+      if(u8g2logEnabled) u8g2log.write(buffer, size);
     #endif
     xSemaphoreGive(_xMutex);
   }

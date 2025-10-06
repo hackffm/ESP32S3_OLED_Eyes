@@ -32,6 +32,8 @@ class LL_Log_c : public Print {
     char receiveLine[RECEIVELINEBUFSIZE];
     bool receiveLineAvailable();
 
+    void enableU8g2log() { u8g2logEnabled = true; }
+
   protected:
     Stream *_ptrlogSerial = NULL;
     WiFiServer *_ptrlogTCPServer = NULL;
@@ -43,6 +45,7 @@ class LL_Log_c : public Print {
     uint16_t _receiveLineIndex = 0;
     bool _receiveLineAvailable = false;
     SemaphoreHandle_t _xMutex = NULL;  // Create a mutex object
+    bool u8g2logEnabled = false;
 };
 
 extern LL_Log_c LL_Log;

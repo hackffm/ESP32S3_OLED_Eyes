@@ -154,6 +154,8 @@ class HackFFMBadgeLib {
 
     fs::FS &filesystem = LittleFS; // default LittleFS
 
+    bool startESPNOW(int channel, wifi_phy_rate_t rate, int8_t txpower);
+
     uint8_t espNowRxData[256]; // buffer for ESP-NOW data
     uint8_t espNowRxDataLen = 0;
     uint8_t espNowRxMac[6]; // MAC address of sender
@@ -166,6 +168,8 @@ class HackFFMBadgeLib {
     bool txDisplaydata(int channel); // channel = 0: stop 
     int  txDisplayChannel = 0;
 
+    uint8_t OledAddress = 0; // 0 = no OLED found
+
   private:
     void detectHardware();
     static const int PINS_PER_VARIANT = 15; 
@@ -177,7 +181,6 @@ class HackFFMBadgeLib {
     static const char* const boardTypeTexts[]; 
 
     Adafruit_NeoPixel boardLED;
-    uint8_t OledAddress = 0;
 
     elapsedMillis lastTouchRead = 0;
     bool touchUpdated = false;
