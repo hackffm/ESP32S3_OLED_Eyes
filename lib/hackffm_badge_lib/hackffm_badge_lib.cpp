@@ -235,12 +235,20 @@ void on_data_recv(const uint8_t *mac_addr, const uint8_t *data, int len) {
     Badge.espNowRxMac[3] = mac_addr[3];
     Badge.espNowRxMac[4] = mac_addr[4];
     Badge.espNowRxMac[5] = mac_addr[5];
-    if(len > 252) len = 252;
-    memcpy(Badge.espNowRxData, data, len);
-    Badge.espNowRxDataLen = len;
     #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
     Badge.espNowRxRssi = esp_now_info->rx_ctrl->rssi;
     #endif
+    if(Badge.currentRadioStatus == HackFFMBadgeLib::radioStatus::EspNowPeerRadar) {
+      // If we are in peer radar mode, try to find peers
+      if((len >= 12) && (data[0] == 'P') && (data[1] == 'e') && (data[2] == 'e') && (data[3] == 'r') &&
+          (data[4] == 'N') && (data[5] == 'a') && (data[6] == 'm') && (data[7] == 'e')) {
+          Badge.peerRadarRxIn(data, len, mac_addr, Badge.espNowRxRssi);  
+      }
+    } else {
+      if(len > 252) len = 252;
+      memcpy(Badge.espNowRxData, data, len);
+      Badge.espNowRxDataLen = len;
+    }
   }
 }
 
@@ -253,25 +261,44 @@ void on_data_sent(const uint8_t *mac, esp_now_send_status_t status) {
   }
 }
 
+// call multiple times until returns true
 bool HackFFMBadgeLib::tryFindDoor() {
-  if(txDisplayChannel > 0) {
-    LL_Log.println("ESP-Now used already for display tx!");
+  // Check if already running
+  if(currentRadioStatus == radioStatus::EspNowDoor) {
+    if(findDoorState == 2) return true;
     return false;
   }
-  // Open ESPNOW with timeout and send get challenge
-  if(findDoorState > 0) {
-    // LL_Log.println("Find door already in progress");
-    if(findDoorState ==  2) return true;
+
+  if((currentRadioStatus == radioStatus::Free) || 
+     (currentRadioStatus == radioStatus::EspNowTxDisplay)) {
+
+    // Radio is usable, open it and send a challenge request
+    startESPNOW(ESPNOW_CHANNEL, WIFI_PHY_RATE_MCS0_LGI, 11 * 4 /* 11 dbm */);
+
+    txCommand("c");
+    findDoorState = 1;
+    findDoorTimeout = 0;
+    currentRadioStatus = radioStatus::EspNowDoor;
+
     return false;
-  }
-  
-  startESPNOW(ESPNOW_CHANNEL, WIFI_PHY_RATE_MCS0_LGI, 11 * 4 /* 11 dbm */);
+  } 
 
-  txCommand("c");
-  findDoorState = 1;
-  findDoorTimeout = 0;
-
+  // Radio busy
+  findDoorState = 0;
   return false;
+}
+
+void HackFFMBadgeLib::peerRadarRxIn(const uint8_t *data, int len, const uint8_t *mac_addr, int8_t rssi) {
+  // Convert name to clear name string
+  char name[33];
+  int idx = 0;
+  memset(name, 0, sizeof(name));
+  strlcpy(name, (char *)&data[18], 32);
+  strlcpy(name, getCleanName(name, true).c_str(), 32);
+  peers[idx].rssi = rssi;
+  peers[idx].rxTime = 0;
+  memcpy(peers[idx].mac, mac_addr, 6);
+  strlcpy(peers[idx].name, name, 32);
 
 }
 
@@ -289,18 +316,17 @@ void HackFFMBadgeLib::tryCloseDoor() {
   }
 }
 
+// Idea is here that if txDisplay is used, other functions
+// can capture the radio if needed and then the radio 
+// is used for display again when radio is free again.
 bool HackFFMBadgeLib::txDisplaydata(int channel) {
-  // Open ESPNOW with timeout and send get challenge
-  if(findDoorState > 0) {
-    // LL_Log.println("Find door already in progress");
-    return false;
-  }
-  
   // Turn off if channel is 0
   if(channel < 1) {
-    if((txDisplayChannel > 0) && (txDisplayChannel <= 13)) {
+    if((txDisplayChannel > 0) && (txDisplayChannel <= 13) && 
+       (currentRadioStatus == radioStatus::EspNowTxDisplay)) {
       esp_now_deinit();
       WiFi.mode(WIFI_OFF);
+      currentRadioStatus == radioStatus::Free;
     }
     txDisplayChannel = 0;
     return false;
@@ -343,11 +369,19 @@ bool HackFFMBadgeLib::txDisplaydata(int channel) {
   static elapsedMillis rateLimit = 0;
 
   if(channel <= 13) {
-    if(channel != txDisplayChannel) {
-      startESPNOW(channel, WIFI_PHY_RATE_MCS4_LGI, 60 /* 15 dbm */);
-
-      // rom_phy_disable_cca();
+    // Use ESPNOW
+    if(currentRadioStatus != radioStatus::EspNowTxDisplay) {
+      if(currentRadioStatus != radioStatus::Free) {
+        // Other mode active
+        return false;
+      } else {
+        // Free, can use ESPNOW but need to restart radio first
+        startESPNOW(channel, WIFI_PHY_RATE_MCS4_LGI, 60 /* 15 dbm */);
+        currentRadioStatus = radioStatus::EspNowTxDisplay;
+        txDisplayChannel = channel;
+      }
     }
+
     if(rateLimit > 20) {
       ESP_ERROR_CHECK(esp_now_send(broadcastAddress, espnow_tx_buf, 1024+18));
       rateLimit = 0;
@@ -373,16 +407,24 @@ bool HackFFMBadgeLib::txDisplaydata(int channel) {
 // Start ESP-Now with given parameters
 bool HackFFMBadgeLib::startESPNOW(int channel, wifi_phy_rate_t rate, int8_t txpower) {
   // WiFi-Init
+  //esp_now_deinit(); // crashes here 
+  WiFi.mode(WIFI_OFF);
+  espNowRxDataLen = 0;
+  //Serial.println("E-1");
+
   wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-  ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-  ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-  ESP_ERROR_CHECK(esp_wifi_start());
-  ESP_ERROR_CHECK(esp_wifi_set_channel((uint8_t)channel, WIFI_SECOND_CHAN_NONE));
+  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_init(&cfg));
+  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_mode(WIFI_MODE_STA));
+  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_start());
+  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_channel((uint8_t)channel, WIFI_SECOND_CHAN_NONE));
+  // Serial.println("E-2");
 
   // ESP-NOW-Init
-  ESP_ERROR_CHECK(esp_now_init());
+  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_now_init());
   esp_now_register_recv_cb(on_data_recv);
   esp_now_register_send_cb(on_data_sent);
+  esp_now_del_peer(broadcastAddress);
+  // Serial.println("E-3");
 
   // Peer-Info konfigurieren (Broadcast)
   esp_now_peer_info_t peer = {
@@ -390,12 +432,12 @@ bool HackFFMBadgeLib::startESPNOW(int channel, wifi_phy_rate_t rate, int8_t txpo
       .channel = (uint8_t)channel,
       .encrypt = false
   };
-  ESP_ERROR_CHECK(esp_now_add_peer(&peer));
+  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_now_add_peer(&peer));
 
   esp_wifi_set_max_tx_power(txpower); // max dbm
   
   esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G|WIFI_PROTOCOL_11N /* |WIFI_PROTOCOL_LR */);
-  
+  // Serial.println("E-4");
   esp_now_rate_config_t en_rateconfig = {
     .phymode = WIFI_PHY_MODE_HT20, // WIFI_PHY_MODE_11G,
     .rate = rate, // WIFI_PHY_RATE_MCS4_SGI,
@@ -541,6 +583,7 @@ void HackFFMBadgeLib::update() {
       esp_now_deinit();
       WiFi.mode(WIFI_OFF);
       Serial.println("Find door timeout");
+      currentRadioStatus = radioStatus::Free;
     } else {
       if(findDoorState < 10) {
         if(espNowRxDataLen > 0) {
@@ -582,6 +625,87 @@ void HackFFMBadgeLib::update() {
       }
     }
   }
+
+  // Send peer radar message if interval is set
+  if(peerRadarTxInterval > 0) {
+    if(peerRadarLastTx > peerRadarTxInterval) {
+      if((currentRadioStatus == radioStatus::Free) ||
+        (currentRadioStatus == radioStatus::EspNowTxDisplay) ||
+        (currentRadioStatus == radioStatus::EspNowPeerRadar)) {
+        
+        // Time to send a peer radar message
+
+        // Construct message: Consists of
+        // "PeerNameTx" (10 bytes),
+        // uint16_t Tx counter (2 bytes little endian),
+        // Full Wifi MAC Address (6 bytes),
+        // Up to 32 bytes of userName (0 filled).
+        static uint16_t peerRadarTxCounter = 0;
+        espnow_tx_buf[0] = 'P';
+        espnow_tx_buf[1] = 'e';
+        espnow_tx_buf[2] = 'e'; 
+        espnow_tx_buf[3] = 'r';
+        espnow_tx_buf[4] = 'N';
+        espnow_tx_buf[5] = 'a'; 
+        espnow_tx_buf[6] = 'm';
+        espnow_tx_buf[7] = 'e';
+        espnow_tx_buf[8] = 'T';
+        espnow_tx_buf[9] = 'x';
+        espnow_tx_buf[10] = peerRadarTxCounter & 0xff;
+        espnow_tx_buf[11] = (peerRadarTxCounter >> 8) & 0xff;
+        peerRadarTxCounter++;
+        uint8_t mac[6];
+        esp_err_t ret = esp_wifi_get_mac(WIFI_IF_STA, mac);
+        espnow_tx_buf[12] = mac[0];
+        espnow_tx_buf[13] = mac[1]; 
+        espnow_tx_buf[14] = mac[2];
+        espnow_tx_buf[15] = mac[3];
+        espnow_tx_buf[16] = mac[4];
+        espnow_tx_buf[17] = mac[5];
+        memset(&espnow_tx_buf[18], 0, 32);
+        strlcpy((char *)&espnow_tx_buf[18], userName, 32);
+
+        //Serial.println("PeerRadarTx...");
+        elapsedMicros sendDuration = 0;
+
+        // Init ESP-Now if not already in EspNowPeerRadar state
+        if(currentRadioStatus != radioStatus::EspNowPeerRadar) {
+            startESPNOW(ESPNOW_CHANNEL, WIFI_PHY_RATE_MCS4_LGI, 10*4 /* 10 dbm */);
+            currentRadioStatus = radioStatus::EspNowPeerRadar;
+        }
+
+        // Send message
+        esp_now_send(broadcastAddress, espnow_tx_buf, 18+32);
+
+        //Serial.printf(" done, send time: %d us\r\n", (int)(sendDuration));
+
+        peerRadarLastTx = 0;
+        peerRadarLastRx = 0;
+        peerRadarStatus = 1;
+
+      }
+    }
+  }
+
+  if(peerRadarStatus > 0) {
+    if(peerRadarLastRx > peerRadarRxDuration) {
+      peerRadarStatus = 0;
+      if(currentRadioStatus == radioStatus::EspNowPeerRadar) {
+        // Turn off radio again
+        esp_now_deinit();
+        WiFi.mode(WIFI_OFF);
+        currentRadioStatus = radioStatus::Free;
+        //Serial.println("PeerRadar end radio off.");
+      }
+    }
+  }
+
+  if(peers[0].rssi != -127) {
+    peers[0].name[32] = 0;
+    LL_Log.printf("Peer found: %s, RSSI: %d dBm\r\n", peers[0].name, peers[0].rssi);
+    peers[0].rssi = -127;
+  }
+
     
 }
 
@@ -857,7 +981,7 @@ void HackFFMBadgeLib::drawString(const char *str, int x, int y, int dy, bool noD
 }
 
 // Function to retrieve name without all $-Escape squences removed
-String HackFFMBadgeLib::getCleanName(const char *str) {
+String HackFFMBadgeLib::getCleanName(const char *str, bool cleanControlChars) {
   String name = "";
   char c;
   int  idx = 0;
@@ -870,14 +994,19 @@ String HackFFMBadgeLib::getCleanName(const char *str) {
       dsFlags &= ~(1);
       switch(c) {
         case '$': name += c; break;
-        case 'n': c = '\n'; name += c; break;
+        case 'n': if(cleanControlChars) c = ' '; else c = '\n'; name += c; break;
         default: break;       
       }
     } else {
       if(c=='$') {
         dsFlags |= 1;
       } else {
-        name += c;
+        if(cleanControlChars && (c < 32)) {
+          // skip control characters
+          if(c == '\n') name += ' ';
+        } else {
+          name += c;
+        }
       }        
     }
   } while((c) && (idx++ < len));  
@@ -1171,10 +1300,10 @@ void HackFFMBadgeLib::detectHardware() {
   
 
   // Init touch processors
-  touch[0] = touchProcessor(pinTouchLU);
-  touch[1] = touchProcessor(pinTouchLD);
-  touch[2] = touchProcessor(pinTouchRU);
-  touch[3] = touchProcessor(pinTouchRD);
+  touch[0].setPin(pinTouchLU);
+  touch[1].setPin(pinTouchLD);
+  touch[2].setPin(pinTouchRU);
+  touch[3].setPin(pinTouchRD);
 
   setPowerAudio(false);
 }
@@ -1361,10 +1490,12 @@ uint32_t HackFFMBadgeLib::but0PressedFor() {
 
 bool HackFFMBadgeLib::connectWifi(const char* ssid, const char* password) {
   bool ret = false;
+
   WiFi.setHostname(hostName);
-  WiFi.mode(WIFI_STA);
+  WiFi.mode(WIFI_STA); WiFi.disconnect(true);
   WiFi.begin(ssid, password);
   WiFi.setTxPower(WIFI_POWER_7dBm);
+
   //WiFi.setSleep(true);
   int tries = 0;
   LL_Log.println("Connecting to WiFi..");
@@ -1382,12 +1513,13 @@ bool HackFFMBadgeLib::connectWifi(const char* ssid, const char* password) {
   
     LL_Log.println("Start FTP server on port 21");
     ftpSrv.begin();    //username, password for ftp.   (default 21, 50009 for PASV)
-  
+    currentRadioStatus = radioStatus::WifiClient;
     ret = true;
   } else {
     LL_Log.println("Connection failed.");
     WiFi.disconnect();
     WiFi.mode(WIFI_OFF);
+    currentRadioStatus = radioStatus::Free;
   }
   return ret;
 }
@@ -1433,6 +1565,7 @@ void HackFFMBadgeLib::setupOTA() {
 }
 
 void HackFFMBadgeLib::tryToUpdate() {
+  currentRadioStatus = radioStatus::WifiOTA;
   WiFi.disconnect();
   if (connectWifi("HACKFFM_BADGE_UPDATER", "")) {
     LL_Log.println("Connected to HACKFFM_BADGE_UPDATER");
@@ -1466,12 +1599,13 @@ void HackFFMBadgeLib::tryToUpdate() {
         }
     }
     http.end();
-    LL_Log.println("OTA update finished.");
+    LL_Log.println("OTA update failed.");
   } else {
     LL_Log.println("Failed to connect to HACKFFM_BADGE_UPDATER");
   }
   WiFi.disconnect();
   WiFi.mode(WIFI_OFF);
+  currentRadioStatus = radioStatus::Free;
 }
 
 uint8_t hex1(const char c) {

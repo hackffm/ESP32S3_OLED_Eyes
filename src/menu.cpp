@@ -306,7 +306,9 @@ void doMenu() {
               Badge.drawString(buf);
               Badge.tryOpenDoor();
               delay(3000);
-            } 
+            } else {
+              prevLUS = false;
+            }
             //menu_main_idx = 0;
             break;
           case 2: // Try close door
@@ -316,7 +318,9 @@ void doMenu() {
               Badge.drawString(buf);
               Badge.tryCloseDoor();
               delay(3000);
-            } 
+            } else {
+              prevLUS = false;
+            }
             //menu_main_idx = 0;
             break;
           case 3: // Toogle touch debug
@@ -548,7 +552,7 @@ void doDebugTouch() {
     float x = Badge.lastTouchX;
     float y = Badge.lastTouchY;
     LL_Log.printf("Touch: Last %d, Avg %d, Val %d , ",
-      Badge.touch[0].getLastTouchValue(), Badge.touch[0].getTouchAvgValue(), Badge.touch[0].getTouchValue());
+      Badge.touch[2].getLastTouchValue(), Badge.touch[2].getTouchAvgValue(), Badge.touch[2].getTouchValue());
     LL_Log.printf("Touch LU:%.2f LD:%.2f RU:%.2f RD:%.2f %.2f:%.2f\r\n", HackFFMBadge.lastTouchLU, HackFFMBadge.lastTouchLD,
       HackFFMBadge.lastTouchRU, HackFFMBadge.lastTouchRD, x, y);
     x = constrain(x, -2.0, 2.0);

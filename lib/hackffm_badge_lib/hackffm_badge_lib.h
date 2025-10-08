@@ -31,6 +31,7 @@ class touchProcessor {
     touchProcessor(int pin) : _pin(pin) {
       _touchAvgValue = 0;
       _touched = false;
+      _strangeValueTimer = 0;
     }
     void update() {
       if(_pin < 0) return;
@@ -39,6 +40,16 @@ class touchProcessor {
       _touchValue = _lastTouchValue - _touchAvgValue;
       _touchAvgValue += ((_touchValue > 0)?1:-1); 
       _touched = (_touchValue > 160)?true:false; 
+      if(abs(_touchValue) < 200) {
+        _strangeValueTimer = 0;
+      } else {
+        if(_strangeValueTimer > 5000) {
+          // strange value for more than 5 seconds, reset average
+          _touchAvgValue = _lastTouchValue;
+          _strangeValueTimer = 0;
+          Serial.println("Touch reset avg");
+        }
+      }
     }
     bool isTouched() { return _touched; }
     int32_t getTouchValue() { return _touchValue; }
@@ -50,12 +61,14 @@ class touchProcessor {
       _touchAvgValue = 0;
       _touchValue = 0;
       _touched = false;
+      _strangeValueTimer = 0;
     }
   private:
     int _pin = -1;
     int32_t _lastTouchValue;
     int32_t _touchAvgValue;
     int32_t _touchValue;
+    elapsedMillis _strangeValueTimer = 0;
     bool _touched;
 };
 
@@ -150,7 +163,7 @@ class HackFFMBadgeLib {
     char hostName[32] = "hackffm-badge\0"; // add MAC address to make it unique
     char userName[128] = "$fHackFFM$nBadge\0";
 
-    String getCleanName(const char *str); // use this to clean userName for display
+    String getCleanName(const char *str, bool cleanControlChars = false); // use this to clean userName for display
 
     fs::FS &filesystem = LittleFS; // default LittleFS
 
@@ -169,6 +182,34 @@ class HackFFMBadgeLib {
     int  txDisplayChannel = 0;
 
     uint8_t OledAddress = 0; // 0 = no OLED found
+
+    enum class radioStatus {
+        Free,
+        WifiClient,
+        WifiOTA,
+        EspNowTxDisplay,
+        EspNowDoor,
+        EspNowPeerRadar
+    };
+
+    radioStatus currentRadioStatus = radioStatus::Free;
+
+    void peerRadarRxIn(const uint8_t *data, int len, const uint8_t *mac_addr, int8_t rssi);
+
+    // Struct to hoold peer information
+    struct Peer {
+        char name[33];    
+        int8_t rssi;           
+        elapsedMillis rxTime;  
+        uint8_t mac[6];
+    };
+
+    static const int MAX_PEERS = 10;  // feste Anzahl von Peers
+
+    // Array von Peers mit fester Größe
+    Peer peers[MAX_PEERS];
+    uint16_t peerRadarTxInterval = 9000; // 10000;
+    uint16_t peerRadarRxDuration = 10;
 
   private:
     void detectHardware();
@@ -198,6 +239,11 @@ class HackFFMBadgeLib {
     uint8_t lastChallenge[8];
     elapsedMillis findDoorTimeout = 0;
     uint8_t findDoorState = 0;
+
+    int peerRadarStatus = 0;
+   
+    elapsedMillis peerRadarLastTx = 0;
+    elapsedMillis peerRadarLastRx = 0;
     
 };
 

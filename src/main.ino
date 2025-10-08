@@ -37,10 +37,10 @@ uint32_t idleTime = 0;
 // This sets Arduino Stack Size - comment this line to use default 8K stack size
 SET_LOOP_TASK_STACK_SIZE(16*1024); // 16KB
 
-cpp_freertos::Task task1("AntennaLED", 2000, 1, [](){
+cpp_freertos::Task task1("AntennaLED", 4000, 1, [](){
   // Animate antenna LED
   static uint8_t j = 0;
-  static int once = 100;
+  static int once = 500;
   j++;
   Badge.setAntennaLED(j%32, j%16, j%20);
   delay(50);
@@ -77,11 +77,10 @@ void setup() {
     }
   }
 
-  
-  task1.Start(1);
-
   // setup2();
   Badge.playMP3("/boot.mp3");
+
+  task1.Start(1);
 
   // Cast screen to this channel if file exists and contains the channel number
   Badge.txDisplaydata(Badge.readFile("/scrncast.chn").toInt());
@@ -295,6 +294,11 @@ void processCommands() {
 
       Badge.drawCenteredUTF8Text(&LL_Log.receiveLine[1]);
       delay(10000);
+    }
+    if(LL_Log.receiveLine[0]=='R') {
+      LL_Log.println("Peer Radar on.");
+      Badge.peerRadarTxInterval = 1000; 
+      Badge.peerRadarRxDuration = 20000;
     }
   }
 }
